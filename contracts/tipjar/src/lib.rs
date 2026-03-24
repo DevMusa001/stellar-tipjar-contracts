@@ -19,6 +19,18 @@ pub struct TipWithMessage {
     pub timestamp: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Milestone {
+    pub id: u64,
+    pub creator: Address,
+    pub goal_amount: i128,
+    pub current_amount: i128,
+    pub description: String,
+    pub deadline: Option<u64>,
+    pub completed: bool,
+}
+
 /// Storage layout for persistent contract data.
 #[derive(Clone)]
 #[contracttype]
@@ -35,6 +47,12 @@ pub enum DataKey {
     Admin,
     /// Messages appended for a creator.
     CreatorMessages(Address),
+    /// Current number of milestones for a creator (used for ID).
+    MilestoneCounter(Address),
+    /// Data for a specific milestone.
+    Milestone(Address, u64),
+    /// Active milestone IDs for a creator to track.
+    ActiveMilestones(Address),
 }
 
 #[contracterror]
@@ -46,6 +64,9 @@ pub enum TipJarError {
     InvalidAmount = 3,
     NothingToWithdraw = 4,
     MessageTooLong = 5,
+    MilestoneNotFound = 6,
+    MilestoneAlreadyCompleted = 7,
+    InvalidGoalAmount = 8,
 }
 
 #[contract]
@@ -209,9 +230,11 @@ impl TipJarContract {
 
         // Emit message payload
         env.events().publish(
-            (symbol_short!("tip_msg"), creator),
+            (symbol_short!("tip_msg"), creator.clone()),
             (sender, amount, message, metadata),
         );
+
+        Self::update_milestones(&env, creator, amount);
     }
 
     /// Returns total historical tips for a creator.
@@ -297,7 +320,7 @@ impl TipJarContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, token, Address, Env};
+    use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, token, Address, Env};
 
     fn setup() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();

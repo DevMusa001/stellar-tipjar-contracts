@@ -1,5 +1,8 @@
 #![no_std]
 
+pub mod interfaces;
+pub mod integrations;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
     Address, Env, Map, String, Vec,
@@ -47,6 +50,20 @@ pub struct LockedTip {
     pub token: Address,
     pub amount: i128,
     pub unlock_timestamp: u64,
+}
+
+/// Internal record of a tip for refund tracking.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipRecord {
+    pub id: u64,
+    pub sender: Address,
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub refunded: bool,
+    pub refund_requested: bool,
 }
 
 #[contracttype]
@@ -197,6 +214,9 @@ pub enum TipJarError {
     MatchingProgramNotFound = 16,
     MatchingProgramInactive = 17,
     InvalidMatchRatio = 18,
+    DexNotConfigured = 19,
+    NftNotConfigured = 20,
+    SwapFailed = 21,
 }
 
 /// Grace period for automatic refunds: 24 hours in seconds.
@@ -265,7 +285,7 @@ impl TipJarContract {
         env.storage().persistent().set(&creator_total_key, &next_total);
 
         // Record the tip for refund tracking.
-        let tip_id = Self::next_tip_id(&env);
+        let tip_id = next_tip_id(&env);
         let record = TipRecord {
             id: tip_id,
             sender: sender.clone(),
@@ -344,7 +364,7 @@ impl TipJarContract {
         env.storage().persistent().set(&msgs_key, &messages);
 
         // Record the tip for refund tracking.
-        let tip_id = Self::next_tip_id(&env);
+        let tip_id = next_tip_id(&env);
         let record = TipRecord {
             id: tip_id,
             sender: sender.clone(),
@@ -1057,6 +1077,87 @@ impl TipJarContract {
             .get(&DataKey::MatchingProgram(program_id))
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MatchingProgramNotFound))
     }
+
+    // ── Cross-contract composability ─────────────────────────────────────────
+
+    /// Admin: store the DEX contract address used for token swaps.
+    pub fn set_dex(env: Env, admin: Address, dex: Address) {
+        admin.require_auth();
+        require_role(&env, &admin, Role::Admin);
+        env.storage().instance().set(&DataKey::DexContract, &dex);
+    }
+
+    /// Admin: store the NFT contract address used for tip rewards.
+    pub fn set_nft_contract(env: Env, admin: Address, nft: Address) {
+        admin.require_auth();
+        require_role(&env, &admin, Role::Admin);
+        env.storage().instance().set(&DataKey::NftContract, &nft);
+    }
+
+    /// Tip a creator by first swapping `input_token` → tip token via the configured DEX.
+    ///
+    /// `input_amount`  – amount of `input_token` the sender provides.
+    /// `min_output`    – minimum tip-token amount accepted (slippage guard).
+    /// `tip_token`     – the whitelisted token the creator receives.
+    pub fn tip_with_swap(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        input_token: Address,
+        tip_token: Address,
+        input_amount: i128,
+        min_output: i128,
+    ) -> u64 {
+        if Self::is_paused(&env) {
+            panic!("Contract is paused");
+        }
+        if input_amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if !Self::is_whitelisted(env.clone(), tip_token.clone()) {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+        if !env.storage().instance().has(&DataKey::DexContract) {
+            panic_with_error!(&env, TipJarError::DexNotConfigured);
+        }
+
+        sender.require_auth();
+
+        let output_amount =
+            integrations::swap::swap_to_tip_token(&env, &sender, &input_token, &tip_token, input_amount, min_output);
+
+        Self::tip(env, sender, creator, tip_token, output_amount)
+    }
+
+    /// Tip a creator and optionally mint an NFT reward to the sender when the
+    /// tip meets or exceeds `nft_threshold` (in the tip token's base units).
+    pub fn tip_with_nft_reward(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        nft_threshold: i128,
+        nft_metadata: String,
+    ) -> u64 {
+        if Self::is_paused(&env) {
+            panic!("Contract is paused");
+        }
+
+        let tip_id = Self::tip(env.clone(), sender.clone(), creator, token, amount);
+
+        if amount >= nft_threshold {
+            let nft_address: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::NftContract)
+                .unwrap_or_else(|| panic_with_error!(&env, TipJarError::NftNotConfigured));
+
+            interfaces::nft::NftClient::new(&env, &nft_address).mint(&sender, &nft_metadata);
+        }
+
+        tip_id
+    }
 }
 
 /// Increments and returns the next matching program ID.
@@ -1068,6 +1169,18 @@ fn next_matching_id(env: &Env) -> u64 {
         .unwrap_or(0);
     let next = id + 1;
     env.storage().instance().set(&DataKey::MatchingCounter, &next);
+    next
+}
+
+/// Increments and returns the next global tip ID.
+fn next_tip_id(env: &Env) -> u64 {
+    let id: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TipCounter)
+        .unwrap_or(0);
+    let next = id + 1;
+    env.storage().instance().set(&DataKey::TipCounter, &next);
     next
 }
 

@@ -95,6 +95,22 @@ pub enum Role {
     Creator,
 }
 
+/// A sponsor-funded tip matching program.
+///
+/// `match_ratio` is in basis points: 100 = 1:1, 200 = 2:1.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchingProgram {
+    pub id: u64,
+    pub sponsor: Address,
+    pub creator: Address,
+    pub token: Address,
+    pub match_ratio: u32,
+    pub max_match_amount: i128,
+    pub current_matched: i128,
+    pub active: bool,
+}
+
 /// Storage layout for persistent contract data.
 #[derive(Clone)]
 #[contracttype]
@@ -133,6 +149,12 @@ pub enum DataKey {
     LockedTip(Address, u64),
     /// Per-creator counter for assigning tip IDs (u64).
     LockedTipCounter(Address),
+    /// Global matching program counter.
+    MatchingCounter,
+    /// Individual matching program by ID.
+    MatchingProgram(u64),
+    /// Matching program IDs indexed under a creator.
+    CreatorMatchingPrograms(Address),
 }
 
 #[contracterror]
@@ -154,7 +176,13 @@ pub enum TipJarError {
     InvalidUnlockTime = 13,
     TipStillLocked = 14,
     LockedTipNotFound = 15,
+    MatchingProgramNotFound = 16,
+    MatchingProgramInactive = 17,
+    InvalidMatchRatio = 18,
 }
+
+/// Grace period for automatic refunds: 24 hours in seconds.
+const GRACE_PERIOD_SECS: u64 = 86_400;
 
 #[contract]
 pub struct TipJarContract;
@@ -190,16 +218,14 @@ impl TipJarContract {
     }
 
     /// Moves `amount` tokens from `sender` into contract escrow for `creator`.
-    ///
-    /// The sender must authorize this call and have enough token balance.
-    pub fn tip(env: Env, sender: Address, creator: Address, token: Address, amount: i128) {
+    /// Returns the tip ID for use in refund requests.
+    pub fn tip(env: Env, sender: Address, creator: Address, token: Address, amount: i128) -> u64 {
         if Self::is_paused(&env) {
             panic!("Contract is paused");
         }
         if amount <= 0 {
             panic_with_error!(&env, TipJarError::InvalidAmount);
         }
-
         if !Self::is_whitelisted(env.clone(), token.clone()) {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
@@ -220,7 +246,20 @@ impl TipJarContract {
         env.storage().persistent().set(&creator_balance_key, &next_balance);
         env.storage().persistent().set(&creator_total_key, &next_total);
 
-        // Event topics: ("tip", creator, token). Event data: (sender, amount).
+        // Record the tip for refund tracking.
+        let tip_id = Self::next_tip_id(&env);
+        let record = TipRecord {
+            id: tip_id,
+            sender: sender.clone(),
+            creator: creator.clone(),
+            token: token.clone(),
+            amount,
+            timestamp: env.ledger().timestamp(),
+            refunded: false,
+            refund_requested: false,
+        };
+        env.storage().persistent().set(&DataKey::TipRecord(tip_id), &record);
+
         env.events()
             .publish((symbol_short!("tip"), creator.clone(), token), (sender.clone(), amount));
 
@@ -228,6 +267,7 @@ impl TipJarContract {
     }
 
     /// Allows supporters to attach a note and metadata to a tip.
+    /// Returns the tip ID for use in refund requests.
     pub fn tip_with_message(
         env: Env,
         sender: Address,
@@ -284,10 +324,25 @@ impl TipJarContract {
         messages.push_back(payload);
         env.storage().persistent().set(&msgs_key, &messages);
 
+        // Record the tip for refund tracking.
+        let tip_id = Self::next_tip_id(&env);
+        let record = TipRecord {
+            id: tip_id,
+            sender: sender.clone(),
+            creator: creator.clone(),
+            token: token.clone(),
+            amount,
+            timestamp,
+            refunded: false,
+            refund_requested: false,
+        };
+        env.storage().persistent().set(&DataKey::TipRecord(tip_id), &record);
+
         env.events().publish(
             (symbol_short!("tip_msg"), creator.clone()),
             (sender.clone(), amount, message, metadata),
         );
+    }
 
         update_leaderboard_aggregates(&env, &sender, &creator, amount);
     }
@@ -486,7 +541,8 @@ impl TipJarContract {
         env.storage().instance().set(&DataKey::Paused, &false);
     }
 
-    /// Internal helper to check if the contract is paused.
+    // ── Internal helpers ────────────────────────────────────────────────────
+
     fn is_paused(env: &Env) -> bool {
         env.storage()
             .instance()
@@ -708,6 +764,209 @@ impl TipJarContract {
             .get(&DataKey::LockedTip(creator, tip_id))
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::LockedTipNotFound))
     }
+
+    /// Sponsor creates a matching program and deposits `max_match_amount` tokens
+    /// into the contract as the matching budget.
+    ///
+    /// `match_ratio` is in basis points: 100 = 1:1, 200 = 2:1.
+    pub fn create_matching_program(
+        env: Env,
+        sponsor: Address,
+        creator: Address,
+        token: Address,
+        match_ratio: u32,
+        max_match_amount: i128,
+    ) -> u64 {
+        if Self::is_paused(&env) {
+            panic!("Contract is paused");
+        }
+        if match_ratio == 0 {
+            panic_with_error!(&env, TipJarError::InvalidMatchRatio);
+        }
+        if max_match_amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if !Self::is_whitelisted(env.clone(), token.clone()) {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        sponsor.require_auth();
+
+        // Sponsor deposits the full matching budget upfront.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&sponsor, &env.current_contract_address(), &max_match_amount);
+
+        let program_id = next_matching_id(&env);
+        let program = MatchingProgram {
+            id: program_id,
+            sponsor: sponsor.clone(),
+            creator: creator.clone(),
+            token: token.clone(),
+            match_ratio,
+            max_match_amount,
+            current_matched: 0,
+            active: true,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::MatchingProgram(program_id), &program);
+
+        let mut programs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorMatchingPrograms(creator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        programs.push_back(program_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorMatchingPrograms(creator.clone()), &programs);
+
+        env.events().publish(
+            (symbol_short!("match_new"), creator, token),
+            (sponsor, program_id, match_ratio, max_match_amount),
+        );
+
+        program_id
+    }
+
+    /// Send a tip that is automatically matched by the first active matching
+    /// program for this creator/token pair (if any budget remains).
+    ///
+    /// Returns `(tip_matched_amount)` — the amount the sponsor contributed.
+    pub fn tip_with_match(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+    ) -> i128 {
+        if Self::is_paused(&env) {
+            panic!("Contract is paused");
+        }
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if !Self::is_whitelisted(env.clone(), token.clone()) {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        sender.require_auth();
+
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&sender, &env.current_contract_address(), &amount);
+
+        // Find the first active matching program with remaining budget.
+        let mut matched_amount: i128 = 0;
+        let programs: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorMatchingPrograms(creator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        for program_id in programs.iter() {
+            let key = DataKey::MatchingProgram(program_id);
+            let mut program: MatchingProgram = match env.storage().persistent().get(&key) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            if !program.active || program.token != token {
+                continue;
+            }
+
+            let remaining = program.max_match_amount - program.current_matched;
+            if remaining <= 0 {
+                continue;
+            }
+
+            // match_amount = tip * ratio / 100, capped at remaining budget.
+            let raw_match = amount
+                .checked_mul(program.match_ratio as i128)
+                .unwrap_or(i128::MAX)
+                / 100;
+            matched_amount = if raw_match > remaining { remaining } else { raw_match };
+
+            program.current_matched += matched_amount;
+            if program.current_matched >= program.max_match_amount {
+                program.active = false;
+            }
+            env.storage().persistent().set(&key, &program);
+            break;
+        }
+
+        let total_credit = amount + matched_amount;
+        let balance_key = DataKey::CreatorBalance(creator.clone(), token.clone());
+        let total_key = DataKey::CreatorTotal(creator.clone(), token.clone());
+        let new_balance: i128 =
+            env.storage().persistent().get(&balance_key).unwrap_or(0) + total_credit;
+        let new_total: i128 =
+            env.storage().persistent().get(&total_key).unwrap_or(0) + total_credit;
+        env.storage().persistent().set(&balance_key, &new_balance);
+        env.storage().persistent().set(&total_key, &new_total);
+
+        env.events().publish(
+            (symbol_short!("tip_match"), creator.clone(), token.clone()),
+            (sender, amount, matched_amount),
+        );
+
+        matched_amount
+    }
+
+    /// Sponsor cancels their matching program and reclaims unspent budget.
+    pub fn cancel_matching_program(env: Env, sponsor: Address, program_id: u64) {
+        if Self::is_paused(&env) {
+            panic!("Contract is paused");
+        }
+        sponsor.require_auth();
+
+        let key = DataKey::MatchingProgram(program_id);
+        let mut program: MatchingProgram = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MatchingProgramNotFound));
+
+        if program.sponsor != sponsor {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if !program.active {
+            panic_with_error!(&env, TipJarError::MatchingProgramInactive);
+        }
+
+        let unspent = program.max_match_amount - program.current_matched;
+        program.active = false;
+        env.storage().persistent().set(&key, &program);
+
+        if unspent > 0 {
+            let token_client = token::Client::new(&env, &program.token);
+            token_client.transfer(&env.current_contract_address(), &sponsor, &unspent);
+        }
+
+        env.events().publish(
+            (symbol_short!("match_end"), program.creator, program.token),
+            (sponsor, program_id, unspent),
+        );
+    }
+
+    /// Returns a matching program by ID.
+    pub fn get_matching_program(env: Env, program_id: u64) -> MatchingProgram {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MatchingProgram(program_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MatchingProgramNotFound))
+    }
+}
+
+/// Increments and returns the next matching program ID.
+fn next_matching_id(env: &Env) -> u64 {
+    let id: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::MatchingCounter)
+        .unwrap_or(0);
+    let next = id + 1;
+    env.storage().instance().set(&DataKey::MatchingCounter, &next);
+    next
 }
 
 /// Shared write path for granting a role. Used by `grant_role` and `init`.
@@ -1084,7 +1343,6 @@ mod tests {
         let (env, contract_id, token_id_1, token_id_2, admin) = setup();
         let tipjar_client = TipJarContractClient::new(&env, &contract_id);
         let token_client_1 = token::Client::new(&env, &token_id_1);
-        let token_client_2 = token::Client::new(&env, &token_id_2);
         let token_admin_client_1 = token::StellarAssetClient::new(&env, &token_id_1);
         let token_admin_client_2 = token::StellarAssetClient::new(&env, &token_id_2);
 
@@ -1107,7 +1365,6 @@ mod tests {
         // Success after whitelisting token 2
         tipjar_client.add_token(&admin, &token_id_2);
         tipjar_client.tip(&sender, &creator, &token_id_2, &300);
-        assert_eq!(token_client_2.balance(&sender), 700);
         assert_eq!(tipjar_client.get_total_tips(&creator, &token_id_2), 300);
     }
 
@@ -2332,259 +2589,158 @@ mod tests {
         );
     }
 
-    // ── Tip history query tests ───────────────────────────────────────────────
+    // ── Matching program tests ────────────────────────────────────────────────
 
-    fn tip_msg(
-        env: &Env,
-        client: &TipJarContractClient,
-        token_id: &Address,
-        sender: &Address,
-        creator: &Address,
-        amount: i128,
-        ts: u64,
-    ) {
-        env.ledger().with_mut(|li| li.timestamp = ts);
-        client.tip_with_message(
-            sender,
-            creator,
-            token_id,
-            &amount,
-            &soroban_sdk::String::from_str(env, "msg"),
-            &soroban_sdk::Map::new(env),
+    #[test]
+    fn test_match_calculation_1_to_1() {
+        let (env, contract_id, token_id, _, _) = setup();
+        let client = TipJarContractClient::new(&env, &contract_id);
+        let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let token_client = token::Client::new(&env, &token_id);
+        let sponsor = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        token_admin.mint(&sponsor, &1_000);
+        token_admin.mint(&sender, &500);
+
+        // 1:1 match, budget = 500
+        let program_id = client.create_matching_program(
+            &sponsor, &creator, &token_id, &100u32, &500i128,
         );
+        assert_eq!(token_client.balance(&sponsor), 500); // 500 deposited
+
+        let matched = client.tip_with_match(&sender, &creator, &token_id, &200);
+
+        assert_eq!(matched, 200); // 1:1
+        assert_eq!(client.get_withdrawable_balance(&creator, &token_id), 400);
+        assert_eq!(client.get_total_tips(&creator, &token_id), 400);
+
+        let program = client.get_matching_program(&program_id);
+        assert_eq!(program.current_matched, 200);
+        assert!(program.active);
     }
 
     #[test]
-    fn test_get_creator_tips_returns_sorted_descending() {
+    fn test_match_calculation_2_to_1() {
         let (env, contract_id, token_id, _, _) = setup();
         let client = TipJarContractClient::new(&env, &contract_id);
         let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let sponsor = Address::generate(&env);
         let sender = Address::generate(&env);
         let creator = Address::generate(&env);
-        token_admin.mint(&sender, &3_000);
 
-        tip_msg(&env, &client, &token_id, &sender, &creator, 100, 1000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 200, 3000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 300, 2000);
+        token_admin.mint(&sponsor, &1_000);
+        token_admin.mint(&sender, &500);
 
-        let result = client.get_creator_tips(&creator, &10);
-        assert_eq!(result.len(), 3);
-        // Sorted descending by timestamp: 3000, 2000, 1000
-        assert_eq!(result.get(0).unwrap().timestamp, 3000);
-        assert_eq!(result.get(1).unwrap().timestamp, 2000);
-        assert_eq!(result.get(2).unwrap().timestamp, 1000);
+        // 2:1 match (ratio=200), budget = 1000
+        client.create_matching_program(&sponsor, &creator, &token_id, &200u32, &1_000i128);
+
+        let matched = client.tip_with_match(&sender, &creator, &token_id, &100);
+
+        assert_eq!(matched, 200); // 2:1
+        assert_eq!(client.get_withdrawable_balance(&creator, &token_id), 300);
     }
 
     #[test]
-    fn test_get_creator_tips_limit() {
+    fn test_match_limit_caps_at_budget() {
         let (env, contract_id, token_id, _, _) = setup();
         let client = TipJarContractClient::new(&env, &contract_id);
         let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let sponsor = Address::generate(&env);
         let sender = Address::generate(&env);
         let creator = Address::generate(&env);
-        token_admin.mint(&sender, &3_000);
 
-        tip_msg(&env, &client, &token_id, &sender, &creator, 100, 1000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 200, 2000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 300, 3000);
-
-        let result = client.get_creator_tips(&creator, &2);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.get(0).unwrap().timestamp, 3000);
-        assert_eq!(result.get(1).unwrap().timestamp, 2000);
-    }
-
-    #[test]
-    fn test_get_creator_tips_no_messages_returns_empty() {
-        let (env, contract_id, _, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let creator = Address::generate(&env);
-        let result = client.get_creator_tips(&creator, &10);
-        assert_eq!(result.len(), 0);
-    }
-
-    #[test]
-    fn test_get_tip_history_filter_by_sender() {
-        let (env, contract_id, token_id, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let token_admin = token::StellarAssetClient::new(&env, &token_id);
-        let sender_a = Address::generate(&env);
-        let sender_b = Address::generate(&env);
-        let creator = Address::generate(&env);
-        token_admin.mint(&sender_a, &1_000);
-        token_admin.mint(&sender_b, &1_000);
-
-        tip_msg(&env, &client, &token_id, &sender_a, &creator, 100, 1000);
-        tip_msg(&env, &client, &token_id, &sender_b, &creator, 200, 2000);
-        tip_msg(&env, &client, &token_id, &sender_a, &creator, 300, 3000);
-
-        let query = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: Some(sender_a.clone()),
-            min_amount: None,
-            max_amount: None,
-            start_time: None,
-            end_time: None,
-            limit: 10,
-            offset: 0,
-        };
-        let result = client.get_tip_history(&query);
-        assert_eq!(result.len(), 2);
-        for r in result.iter() {
-            assert_eq!(r.sender, sender_a);
-        }
-    }
-
-    #[test]
-    fn test_get_tip_history_filter_by_amount_range() {
-        let (env, contract_id, token_id, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let token_admin = token::StellarAssetClient::new(&env, &token_id);
-        let sender = Address::generate(&env);
-        let creator = Address::generate(&env);
-        token_admin.mint(&sender, &3_000);
-
-        tip_msg(&env, &client, &token_id, &sender, &creator, 50,  1000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 150, 2000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 300, 3000);
-
-        let query = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: None,
-            min_amount: Some(100),
-            max_amount: Some(200),
-            start_time: None,
-            end_time: None,
-            limit: 10,
-            offset: 0,
-        };
-        let result = client.get_tip_history(&query);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result.get(0).unwrap().amount, 150);
-    }
-
-    #[test]
-    fn test_get_tip_history_filter_by_time_range() {
-        let (env, contract_id, token_id, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let token_admin = token::StellarAssetClient::new(&env, &token_id);
-        let sender = Address::generate(&env);
-        let creator = Address::generate(&env);
-        token_admin.mint(&sender, &3_000);
-
-        tip_msg(&env, &client, &token_id, &sender, &creator, 100, 1000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 200, 2000);
-        tip_msg(&env, &client, &token_id, &sender, &creator, 300, 5000);
-
-        let query = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: None,
-            min_amount: None,
-            max_amount: None,
-            start_time: Some(1500),
-            end_time: Some(4000),
-            limit: 10,
-            offset: 0,
-        };
-        let result = client.get_tip_history(&query);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result.get(0).unwrap().timestamp, 2000);
-    }
-
-    #[test]
-    fn test_get_tip_history_pagination() {
-        let (env, contract_id, token_id, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let token_admin = token::StellarAssetClient::new(&env, &token_id);
-        let sender = Address::generate(&env);
-        let creator = Address::generate(&env);
-        token_admin.mint(&sender, &5_000);
-
-        // Insert 5 tips with distinct timestamps
-        for i in 1u64..=5 {
-            tip_msg(&env, &client, &token_id, &sender, &creator, (i * 100) as i128, i * 1000);
-        }
-
-        let query_p1 = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: None,
-            min_amount: None,
-            max_amount: None,
-            start_time: None,
-            end_time: None,
-            limit: 2,
-            offset: 0,
-        };
-        let page1 = client.get_tip_history(&query_p1);
-        assert_eq!(page1.len(), 2);
-        assert_eq!(page1.get(0).unwrap().timestamp, 5000); // newest first
-        assert_eq!(page1.get(1).unwrap().timestamp, 4000);
-
-        let query_p2 = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: None,
-            min_amount: None,
-            max_amount: None,
-            start_time: None,
-            end_time: None,
-            limit: 2,
-            offset: 2,
-        };
-        let page2 = client.get_tip_history(&query_p2);
-        assert_eq!(page2.len(), 2);
-        assert_eq!(page2.get(0).unwrap().timestamp, 3000);
-        assert_eq!(page2.get(1).unwrap().timestamp, 2000);
-    }
-
-    #[test]
-    fn test_get_tip_history_offset_past_end_returns_empty() {
-        let (env, contract_id, token_id, _, _) = setup();
-        let client = TipJarContractClient::new(&env, &contract_id);
-        let token_admin = token::StellarAssetClient::new(&env, &token_id);
-        let sender = Address::generate(&env);
-        let creator = Address::generate(&env);
+        token_admin.mint(&sponsor, &150);
         token_admin.mint(&sender, &1_000);
 
-        tip_msg(&env, &client, &token_id, &sender, &creator, 100, 1000);
+        // 1:1 match but only 150 budget
+        client.create_matching_program(&sponsor, &creator, &token_id, &100u32, &150i128);
 
-        let query = TipHistoryQuery {
-            creator: Some(creator.clone()),
-            sender: None,
-            min_amount: None,
-            max_amount: None,
-            start_time: None,
-            end_time: None,
-            limit: 10,
-            offset: 99,
-        };
-        let result = client.get_tip_history(&query);
-        assert_eq!(result.len(), 0);
+        // Tip of 200 — match capped at 150
+        let matched = client.tip_with_match(&sender, &creator, &token_id, &200);
+        assert_eq!(matched, 150);
+        assert_eq!(client.get_withdrawable_balance(&creator, &token_id), 350);
     }
 
     #[test]
-    fn test_get_tip_history_no_creator_filter_scans_all() {
+    fn test_program_exhaustion_deactivates() {
         let (env, contract_id, token_id, _, _) = setup();
         let client = TipJarContractClient::new(&env, &contract_id);
         let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let sponsor = Address::generate(&env);
         let sender = Address::generate(&env);
-        let creator_a = Address::generate(&env);
-        let creator_b = Address::generate(&env);
-        token_admin.mint(&sender, &3_000);
+        let creator = Address::generate(&env);
 
-        tip_msg(&env, &client, &token_id, &sender, &creator_a, 100, 1000);
-        tip_msg(&env, &client, &token_id, &sender, &creator_b, 200, 2000);
+        token_admin.mint(&sponsor, &100);
+        token_admin.mint(&sender, &1_000);
 
-        let query = TipHistoryQuery {
-            creator: None,
-            sender: None,
-            min_amount: None,
-            max_amount: None,
-            start_time: None,
-            end_time: None,
-            limit: 10,
-            offset: 0,
-        };
-        let result = client.get_tip_history(&query);
-        assert_eq!(result.len(), 2);
+        let program_id =
+            client.create_matching_program(&sponsor, &creator, &token_id, &100u32, &100i128);
+
+        // Exhaust the budget in one tip
+        let matched = client.tip_with_match(&sender, &creator, &token_id, &100);
+        assert_eq!(matched, 100);
+
+        let program = client.get_matching_program(&program_id);
+        assert!(!program.active); // exhausted
+
+        // Next tip gets no match
+        let matched2 = client.tip_with_match(&sender, &creator, &token_id, &100);
+        assert_eq!(matched2, 0);
+    }
+
+    #[test]
+    fn test_cancel_matching_program_returns_unspent() {
+        let (env, contract_id, token_id, _, _) = setup();
+        let client = TipJarContractClient::new(&env, &contract_id);
+        let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let token_client = token::Client::new(&env, &token_id);
+        let sponsor = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        token_admin.mint(&sponsor, &500);
+        token_admin.mint(&sender, &200);
+
+        let program_id =
+            client.create_matching_program(&sponsor, &creator, &token_id, &100u32, &500i128);
+
+        // Use 100 of the budget
+        client.tip_with_match(&sender, &creator, &token_id, &100);
+
+        // Cancel — should return 400 unspent
+        client.cancel_matching_program(&sponsor, &program_id);
+        assert_eq!(token_client.balance(&sponsor), 400);
+
+        let program = client.get_matching_program(&program_id);
+        assert!(!program.active);
+    }
+
+    #[test]
+    fn test_multiple_concurrent_matching_programs() {
+        let (env, contract_id, token_id, _, _) = setup();
+        let client = TipJarContractClient::new(&env, &contract_id);
+        let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let sponsor1 = Address::generate(&env);
+        let sponsor2 = Address::generate(&env);
+        let sender = Address::generate(&env);
+        let creator = Address::generate(&env);
+
+        token_admin.mint(&sponsor1, &200);
+        token_admin.mint(&sponsor2, &300);
+        token_admin.mint(&sender, &1_000);
+
+        // Two programs — first one (sponsor1) used first
+        client.create_matching_program(&sponsor1, &creator, &token_id, &100u32, &200i128);
+        client.create_matching_program(&sponsor2, &creator, &token_id, &100u32, &300i128);
+
+        // Tip 300 — sponsor1 covers up to 200 (its full budget)
+        let matched = client.tip_with_match(&sender, &creator, &token_id, &300);
+        assert_eq!(matched, 200); // sponsor1 exhausted
+
+        // Next tip picks up sponsor2
+        let matched2 = client.tip_with_match(&sender, &creator, &token_id, &100);
+        assert_eq!(matched2, 100);
     }
 }

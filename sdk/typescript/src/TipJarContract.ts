@@ -1,316 +1,205 @@
 import {
   Contract,
-  TransactionBuilder,
+  Keypair,
   Networks,
-  BASE_FEE,
+  SorobanRpc,
+  TransactionBuilder,
   nativeToScVal,
   scValToNative,
-  rpc as SorobanRpc,
+  xdr,
 } from '@stellar/stellar-sdk';
+import {
+  SdkConfig,
+  TipParams,
+  TipResult,
+  WithdrawResult,
+  TipEvent,
+  Network,
+} from './types';
+import {
+  InvalidAmountError,
+  TransactionFailedError,
+  ContractNotInitializedError,
+} from './errors';
+import { NETWORK_CONFIG, parseTipEvent, parseWithdrawEvent, withRetry } from './utils';
 
-import { SendTipParams, TipResult, WithdrawResult } from './types';
-import { getRpcUrl, retry } from './utils';
+const BASE_FEE = '100';
+const TX_TIMEOUT_SEC = 30;
 
 export class TipJarContract {
   private contract: Contract;
   private server: SorobanRpc.Server;
   private networkPassphrase: string;
+  private keypair: Keypair | null = null;
 
-  /**
-   * Creates a new TipJarContract instance.
-   *
-   * @param contractId - Bech32m contract address (C…).
-   * @param network - Target Stellar network ('testnet' | 'mainnet').
-   */
-  constructor(contractId: string, network: 'testnet' | 'mainnet') {
-    this.contract = new Contract(contractId);
-    this.server = new SorobanRpc.Server(getRpcUrl(network));
-    this.networkPassphrase =
-      network === 'testnet' ? Networks.TESTNET : Networks.PUBLIC;
+  constructor(private readonly config: SdkConfig) {
+    const net = NETWORK_CONFIG[config.network];
+    this.contract = new Contract(config.contractId);
+    this.server = new SorobanRpc.Server(config.rpcUrl ?? net.rpcUrl);
+    this.networkPassphrase = net.networkPassphrase;
   }
 
-  /* ===============================
-     WALLET: Freighter Sign
-  ================================ */
-
   /**
-   * Signs a transaction XDR using the Freighter browser extension.
-   *
-   * @param xdr - Unsigned transaction XDR string.
-   * @returns Signed transaction XDR string.
-   * @throws If Freighter is not installed or the user rejects signing.
+   * Store a keypair for transaction signing.
+   * @param keypair - Stellar Keypair used to sign transactions.
+   * @example
+   * sdk.connect(Keypair.fromSecret(process.env.SECRET!));
    */
-  async signWithFreighter(xdr: string): Promise<string> {
-    if (!(window as any).freighterApi) {
-      throw new Error(
-        'Freighter wallet not installed. Visit https://www.freighter.app'
-      );
-    }
-
-    const result = await (window as any).freighterApi.signTransaction(xdr, {
-      networkPassphrase: this.networkPassphrase,
-    });
-
-    if (!result) {
-      throw new Error('Freighter returned an empty signed transaction.');
-    }
-
-    return result;
+  connect(keypair: Keypair): void {
+    this.keypair = keypair;
   }
 
-  /* ===============================
-     WAIT FOR TX CONFIRMATION
-  ================================ */
-
   /**
-   * Polls the RPC node until a transaction is confirmed or fails.
-   *
-   * @param hash - Transaction hash to poll.
-   * @returns The confirmed transaction response.
-   * @throws If the transaction fails or is never confirmed.
+   * Send a tip to a creator.
+   * @param params - Tip parameters including creator, amount, and tipper addresses.
+   * @returns TipResult with transaction hash, creator, and amount.
+   * @throws InvalidAmountError if amount is not positive.
+   * @throws TransactionFailedError if the transaction fails.
+   * @example
+   * const result = await sdk.sendTip({ creator: 'G...', amount: 100n, tipper: 'G...' });
    */
-  async waitForConfirmation(
-    hash: string
-  ): Promise<SorobanRpc.Api.GetTransactionResponse> {
-    let attempts = 0;
-    const maxAttempts = 30;
-
-    while (attempts < maxAttempts) {
-      const tx = await this.server.getTransaction(hash);
-
-      if (tx.status === 'SUCCESS') return tx;
-      if (tx.status === 'FAILED') {
-        throw new Error(`Transaction failed on-chain: ${hash}`);
-      }
-
-      // NOT_FOUND — keep polling
-      await new Promise((r) => setTimeout(r, 1500));
-      attempts++;
-    }
-
-    throw new Error(
-      `Transaction ${hash} was not confirmed after ${maxAttempts} attempts.`
+  async sendTip(params: TipParams): Promise<TipResult> {
+    if (params.amount <= 0n) throw new InvalidAmountError();
+    const op = this.contract.call(
+      'tip',
+      nativeToScVal(params.tipper, { type: 'address' }),
+      nativeToScVal(params.creator, { type: 'address' }),
+      nativeToScVal(params.amount, { type: 'i128' }),
     );
+    const txHash = await withRetry(() => this.buildAndSubmit(op));
+    return { txHash, creator: params.creator, amount: params.amount };
   }
 
-  /* ===============================
-     HANDLE TX RESPONSE
-  ================================ */
-
   /**
-   * Validates a send response and waits for on-chain confirmation.
-   *
-   * @param result - Response from server.sendTransaction().
-   * @returns Resolved TipResult with txHash and ledger.
-   * @throws If the transaction was not accepted as PENDING.
+   * Withdraw the full escrowed balance for a creator.
+   * @param creator - Stellar address of the creator.
+   * @returns WithdrawResult with transaction hash, creator, and withdrawn amount.
+   * @throws TransactionFailedError if the transaction fails.
+   * @example
+   * const result = await sdk.withdraw('G...');
    */
-  private async handleTxResponse(
-    result: SorobanRpc.Api.SendTransactionResponse
-  ): Promise<TipResult> {
-    if (result.status === 'ERROR') {
-      throw new Error(
-        `Transaction rejected by network: ${
-          result.errorResult?.toXDR('base64') ?? 'unknown error'
-        }`
-      );
-    }
-
-    if (result.status !== 'PENDING') {
-      throw new Error(`Unexpected transaction status: ${result.status}`);
-    }
-
-    const finalTx = await this.waitForConfirmation(result.hash);
-
-    return {
-      success: true,
-      txHash: result.hash,
-      ledger: (finalTx as any).ledger ?? 0,
-    };
+  async withdraw(creator: string): Promise<WithdrawResult> {
+    const balanceBefore = await this.getBalance(creator);
+    const op = this.contract.call('withdraw', nativeToScVal(creator, { type: 'address' }));
+    const txHash = await withRetry(() => this.buildAndSubmit(op));
+    return { txHash, creator, amount: balanceBefore };
   }
 
-  /* ===============================
-     SEND TIP
-  ================================ */
-
   /**
-   * Sends a tip from a tipper to a creator.
-   *
-   * Builds the transaction, simulates it to populate resource fees and
-   * auth entries, signs via Freighter, then submits and awaits confirmation.
-   *
-   * @param params - Tip parameters (creator, tipper, amount, optional memo).
-   * @returns TipResult with txHash and ledger.
-   * @throws If the address is invalid, simulation fails, or signing is rejected.
+   * Get the total historical tips received by a creator.
+   * @param creator - Stellar address of the creator.
+   * @returns Total tips as bigint.
+   * @throws ContractNotInitializedError if the contract has no data for this creator.
+   * @example
+   * const total = await sdk.getTotalTips('G...');
    */
-  async sendTip(params: SendTipParams): Promise<TipResult> {
-    if (!params.creator.startsWith('G')) {
-      throw new Error(
-        'Invalid creator address — must be a Stellar public key (G…)'
+  async getTotalTips(creator: string): Promise<bigint> {
+    return withRetry(async () => {
+      const result = await this.server.simulateTransaction(
+        await this.buildReadTx(
+          this.contract.call('get_total_tips', nativeToScVal(creator, { type: 'address' })),
+        ),
       );
-    }
-    if (!params.tipper.startsWith('G')) {
-      throw new Error(
-        'Invalid tipper address — must be a Stellar public key (G…)'
-      );
-    }
-
-    return retry(async () => {
-      const account = await this.server.getAccount(params.tipper);
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            'send_tip',
-            nativeToScVal(params.creator, { type: 'address' }),
-            nativeToScVal(params.amount, { type: 'i128' }),
-            nativeToScVal(params.tipper, { type: 'address' }),
-            nativeToScVal(params.memo || '', { type: 'string' })
-          )
-        )
-        .setTimeout(30)
-        .build();
-
-      // Simulate to populate auth entries and resource fee
-      const simulation = await this.server.simulateTransaction(tx);
-
-      if (!SorobanRpc.Api.isSimulationSuccess(simulation)) {
-        throw new Error(
-          `sendTip simulation failed: ${
-            (simulation as SorobanRpc.Api.SimulateTransactionErrorResponse)
-              .error
-          }`
-        );
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new ContractNotInitializedError(result.error);
       }
-
-      const assembledTx = SorobanRpc.assembleTransaction(
-        tx,
-        simulation
-      ).build();
-
-      const signedXdr = await this.signWithFreighter(assembledTx.toXDR());
-
-      const signedTx = TransactionBuilder.fromXDR(
-        signedXdr,
-        this.networkPassphrase
-      );
-
-      const result = await this.server.sendTransaction(signedTx);
-
-      return this.handleTxResponse(result);
+      return BigInt(scValToNative((result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval) as string);
     });
   }
 
-  /* ===============================
-     GET BALANCE
-  ================================ */
-
   /**
-   * Returns the current tip balance for a creator account, in stroops.
-   *
-   * @param creator - Stellar public key (G…) of the creator.
-   * @returns Balance in stroops as a bigint.
-   * @throws If simulation fails or the return value cannot be decoded.
+   * Get the withdrawable (escrowed) balance for a creator.
+   * Alias that reads CreatorBalance via get_total_tips simulation pattern.
+   * @param creator - Stellar address of the creator.
+   * @returns Withdrawable balance as bigint.
+   * @throws ContractNotInitializedError if the contract has no data for this creator.
+   * @example
+   * const balance = await sdk.getBalance('G...');
    */
   async getBalance(creator: string): Promise<bigint> {
-    const account = await this.server.getAccount(creator);
+    // The contract exposes withdrawable balance through ledger storage;
+    // we simulate a withdraw call to read CreatorBalance without submitting.
+    return withRetry(async () => {
+      const result = await this.server.simulateTransaction(
+        await this.buildReadTx(
+          this.contract.call('withdraw', nativeToScVal(creator, { type: 'address' })),
+        ),
+      );
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new ContractNotInitializedError(result.error);
+      }
+      return BigInt(scValToNative((result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result!.retval) as string);
+    });
+  }
 
+  /**
+   * Fetch on-chain tip events for a creator.
+   * @param creator - Stellar address of the creator.
+   * @param limit - Maximum number of events to return (default 20).
+   * @returns Array of TipEvent objects.
+   * @example
+   * const events = await sdk.getTipEvents('G...', 10);
+   */
+  async getTipEvents(creator: string, limit = 20): Promise<TipEvent[]> {
+    return withRetry(async () => {
+      const { events } = await this.server.getEvents({
+        filters: [{ type: 'contract', contractIds: [this.config.contractId], topics: [['tip', creator]] }],
+        limit,
+      });
+      return events.map(parseTipEvent);
+    });
+  }
+
+  // ── Private ────────────────────────────────────────────────────────────────
+
+  private async buildReadTx(operation: xdr.Operation): Promise<ReturnType<TransactionBuilder['build']>> {
+    const account = await this.server.getAccount(
+      this.keypair?.publicKey() ?? this.config.contractId,
+    );
+    return new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(TX_TIMEOUT_SEC)
+      .build();
+  }
+
+  private async buildAndSubmit(operation: xdr.Operation): Promise<string> {
+    if (!this.keypair) throw new TransactionFailedError('Call connect() with a Keypair before submitting transactions');
+
+    const account = await this.server.getAccount(this.keypair.publicKey());
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
     })
-      .addOperation(
-        this.contract.call(
-          'get_balance',
-          nativeToScVal(creator, { type: 'address' })
-        )
-      )
-      .setTimeout(30)
+      .addOperation(operation)
+      .setTimeout(TX_TIMEOUT_SEC)
       .build();
 
-    const simulation = await this.server.simulateTransaction(tx);
-
-    if (!SorobanRpc.Api.isSimulationSuccess(simulation)) {
-      throw new Error(
-        `getBalance simulation failed: ${
-          (simulation as SorobanRpc.Api.SimulateTransactionErrorResponse).error
-        }`
-      );
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new TransactionFailedError(`Simulation failed: ${simResult.error}`);
     }
 
-    const retval = simulation.result?.retval;
-    if (!retval) {
-      throw new Error('getBalance returned no value from contract.');
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    preparedTx.sign(this.keypair);
+
+    const sendResult = await this.server.sendTransaction(preparedTx);
+    if (sendResult.status === 'ERROR') {
+      throw new TransactionFailedError(`Submit failed: ${sendResult.errorResult?.toXDR('base64')}`, sendResult.hash);
     }
 
-    return scValToNative(retval) as bigint;
-  }
-
-  /* ===============================
-     WITHDRAW
-  ================================ */
-
-  /**
-   * Withdraws a specified amount from the contract to the creator's account.
-   *
-   * @param creator - Stellar public key (G…) of the creator.
-   * @param amount - Amount in stroops to withdraw.
-   * @returns WithdrawResult with txHash and ledger.
-   * @throws If simulation fails, signing is rejected, or the transaction fails.
-   */
-  async withdraw(creator: string, amount: bigint): Promise<WithdrawResult> {
-    if (!creator.startsWith('G')) {
-      throw new Error(
-        'Invalid creator address — must be a Stellar public key (G…)'
-      );
+    // Poll for confirmation.
+    let getResult = await this.server.getTransaction(sendResult.hash);
+    for (let i = 0; i < 10 && getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      getResult = await this.server.getTransaction(sendResult.hash);
+    }
+    if (getResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      throw new TransactionFailedError('Transaction failed on-chain', sendResult.hash);
     }
 
-    return retry(async () => {
-      const account = await this.server.getAccount(creator);
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            'withdraw',
-            nativeToScVal(creator, { type: 'address' }),
-            nativeToScVal(amount, { type: 'i128' })
-          )
-        )
-        .setTimeout(30)
-        .build();
-
-      // Simulate to populate auth entries and resource fee
-      const simulation = await this.server.simulateTransaction(tx);
-
-      if (!SorobanRpc.Api.isSimulationSuccess(simulation)) {
-        throw new Error(
-          `withdraw simulation failed: ${
-            (simulation as SorobanRpc.Api.SimulateTransactionErrorResponse)
-              .error
-          }`
-        );
-      }
-
-      const assembledTx = SorobanRpc.assembleTransaction(
-        tx,
-        simulation
-      ).build();
-
-      const signedXdr = await this.signWithFreighter(assembledTx.toXDR());
-
-      const signedTx = TransactionBuilder.fromXDR(
-        signedXdr,
-        this.networkPassphrase
-      );
-
-      const result = await this.server.sendTransaction(signedTx);
-
-      return this.handleTxResponse(result) as unknown as WithdrawResult;
-    });
+    return sendResult.hash;
   }
 }

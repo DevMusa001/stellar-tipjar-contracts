@@ -1,35 +1,47 @@
-export const getRpcUrl = (network: 'testnet' | 'mainnet'): string => {
-  return network === 'testnet'
-    ? 'https://soroban-testnet.stellar.org'
-    : 'https://soroban.stellar.org';
+import { SorobanRpc, scValToNative } from '@stellar/stellar-sdk';
+import { Network, TipEvent, WithdrawEvent } from './types';
+import { NetworkError } from './errors';
+
+export const NETWORK_CONFIG: Record<Network, { rpcUrl: string; networkPassphrase: string }> = {
+  testnet: {
+    rpcUrl: 'https://soroban-testnet.stellar.org',
+    networkPassphrase: 'Test SDF Network ; September 2015',
+  },
+  mainnet: {
+    rpcUrl: 'https://soroban.stellar.org',
+    networkPassphrase: 'Public Global Stellar Network ; September 2015',
+  },
 };
 
-/**
- * Retries an async function with exponential backoff.
- *
- * @param fn - Async function to retry.
- * @param retries - Number of retry attempts (default 3).
- * @param delay - Base delay in ms, doubles on each retry (default 1000).
- * @returns Resolved value from fn.
- * @throws Last encountered error after all retries are exhausted.
- */
-export async function retry<T>(
-  fn: () => Promise<T>,
-  retries = 3,
-  delay = 1000
-): Promise<T> {
-  let lastError: unknown;
+export function parseTipEvent(event: SorobanRpc.Api.EventResponse): TipEvent {
+  const [senderVal, amountVal] = event.value as unknown[];
+  return {
+    sender: scValToNative(senderVal as Parameters<typeof scValToNative>[0]) as string,
+    amount: BigInt(scValToNative(amountVal as Parameters<typeof scValToNative>[0]) as string),
+  };
+}
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
+export function parseWithdrawEvent(event: SorobanRpc.Api.EventResponse): WithdrawEvent {
+  const [amountVal] = event.value as unknown[];
+  return {
+    amount: BigInt(scValToNative(amountVal as Parameters<typeof scValToNative>[0]) as string),
+  };
+}
+
+export async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  let attempt = 0;
+  while (true) {
     try {
       return await fn();
-    } catch (error) {
-      lastError = error;
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, delay * 2 ** attempt));
+    } catch (err) {
+      attempt++;
+      if (attempt > retries) {
+        throw new NetworkError(
+          `Operation failed after ${retries} retries: ${(err as Error).message}`,
+          retries,
+        );
       }
+      await new Promise((r) => setTimeout(r, 2 ** attempt * 200));
     }
   }
-
-  throw lastError;
 }

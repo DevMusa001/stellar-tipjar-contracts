@@ -77,6 +77,16 @@ pub struct LockedTip {
     pub unlock_timestamp: u64,
 }
 
+/// Metadata stored on-chain for each tip with an optional message.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipMetadata {
+    pub sender: Address,
+    pub amount: i128,
+    pub message: Option<String>,
+    pub timestamp: u64,
+}
+
 /// Internal record of a tip for refund tracking.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -245,6 +255,10 @@ pub enum DataKey {
     Subscription(Address, Address),
     /// Human-readable reason stored when the contract is paused.
     PauseReason,
+    /// TipMetadata keyed by (creator, tip_index).
+    TipHistory(Address, u64),
+    /// Total number of tips with metadata stored for a creator.
+    TipCount(Address),
 }
 
 #[contracterror]
@@ -850,6 +864,158 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::Subscription(subscriber, creator))
+    }
+
+    /// Like `tip`, but stores an optional on-chain message and metadata.
+    ///
+    /// `message` is limited to 200 Unicode scalar values (character count, not
+    /// byte count) so that emoji and multi-byte characters are treated fairly.
+    /// Panics with `TipJarError::MessageTooLong` when the limit is exceeded.
+    ///
+    /// Metadata is stored in persistent storage under `TipHistory(creator, index)`
+    /// and the per-creator counter `TipCount(creator)` is incremented.
+    ///
+    /// Emits `("tip_msg", creator)` with data `(sender, amount, message)`.
+    pub fn tip_with_message(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        message: Option<String>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        sender.require_auth();
+
+        // Validate message length by character count (not bytes) to support emoji.
+        if let Some(ref msg) = message {
+            // Soroban String stores raw bytes; convert to a &str slice for char counting.
+            let bytes = msg.to_string();
+            let char_count = bytes.chars().count();
+            if char_count > 200 {
+                panic_with_error!(&env, TipJarError::MessageTooLong);
+            }
+        }
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        token::Client::new(&env, &token).transfer(
+            &sender,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(0);
+        let fee: i128 = (amount * fee_bp as i128) / 10_000;
+        let creator_amount = amount - fee;
+
+        if fee > 0 {
+            let fee_key = DataKey::PlatformFeeBalance(token.clone());
+            let new_fee_bal: i128 =
+                env.storage().instance().get(&fee_key).unwrap_or(0) + fee;
+            env.storage().instance().set(&fee_key, &new_fee_bal);
+        }
+
+        let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
+        let existing_bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&bal_key)
+            .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+        env.storage()
+            .persistent()
+            .set(&bal_key, &(existing_bal + creator_amount));
+
+        let tot_key = DataKey::CreatorTotal(creator.clone(), token.clone());
+        let existing_tot: i128 = env
+            .storage()
+            .persistent()
+            .get(&tot_key)
+            .unwrap_or_else(|| env.storage().instance().get(&tot_key).unwrap_or(0));
+        env.storage()
+            .persistent()
+            .set(&tot_key, &(existing_tot + amount));
+
+        Self::update_leaderboard_stats(&env, &sender, &creator, amount);
+
+        // Store metadata and increment tip count.
+        let count_key = DataKey::TipCount(creator.clone());
+        let tip_index: u64 = env
+            .storage()
+            .persistent()
+            .get(&count_key)
+            .unwrap_or(0u64);
+
+        let timestamp = env.ledger().timestamp();
+        let metadata = TipMetadata {
+            sender: sender.clone(),
+            amount,
+            message: message.clone(),
+            timestamp,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::TipHistory(creator.clone(), tip_index), &metadata);
+        env.storage()
+            .persistent()
+            .set(&count_key, &(tip_index + 1));
+
+        env.events().publish(
+            (symbol_short!("tip_msg"), creator.clone()),
+            (sender, amount, message),
+        );
+
+        tip_index
+    }
+
+    /// Returns the most recent tips (with metadata) for `creator`, newest first.
+    ///
+    /// `limit` is capped at 100 to bound storage reads.
+    pub fn get_tip_history(env: Env, creator: Address, limit: u32) -> Vec<TipMetadata> {
+        let count_key = DataKey::TipCount(creator.clone());
+        let total: u64 = env
+            .storage()
+            .persistent()
+            .get(&count_key)
+            .unwrap_or(0u64);
+
+        let cap = if limit > 100 { 100 } else { limit } as u64;
+        let mut result = Vec::new(&env);
+
+        if total == 0 {
+            return result;
+        }
+
+        // Iterate from newest (total-1) down to oldest, up to `cap` entries.
+        let mut idx = total;
+        let mut fetched: u64 = 0;
+        while idx > 0 && fetched < cap {
+            idx -= 1;
+            if let Some(meta) = env
+                .storage()
+                .persistent()
+                .get::<_, TipMetadata>(&DataKey::TipHistory(creator.clone(), idx))
+            {
+                result.push_back(meta);
+                fetched += 1;
+            }
+        }
+
+        result
     }
 
     /// Splits a single tip among multiple recipients proportionally.

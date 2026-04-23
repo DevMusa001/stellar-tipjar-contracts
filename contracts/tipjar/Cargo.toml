@@ -31,3 +31,7 @@ path = "benches/gas_benchmarks.rs"
 [[test]]
 name = "quickcheck_properties"
 path = "tests/quickcheck_properties.rs"
+
+[[test]]
+name = "tip_message_tests"
+path = "tests/tip_message_tests.rs"

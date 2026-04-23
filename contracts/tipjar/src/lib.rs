@@ -36,6 +36,24 @@ pub mod conditions;
 // Dynamic fee adjustment
 pub mod fees;
 
+/// A tip record that includes an optional memo and timestamp.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipWithMemo {
+    pub sender: Address,
+    pub amount: i128,
+    pub memo: Option<String>,
+    pub timestamp: u64,
+}
+
+/// Combined creator stats stored in a single persistent entry to reduce storage reads/writes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreatorStats {
+    pub balance: i128,
+    pub total: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TipWithMessage {

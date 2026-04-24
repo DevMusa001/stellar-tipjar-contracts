@@ -89,6 +89,21 @@ pub struct Delegation {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VestingSchedule {
+    pub id: u64,
+    pub creator: Address,
+    pub tipper: Address,
+    pub token: Address,
+    pub total_amount: i128,
+    pub start_time: u64,
+    pub cliff_duration: u64,
+    pub vesting_duration: u64,
+    pub withdrawn: i128,
+    pub created_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Milestone {
     pub id: u64,
     pub creator: Address,
@@ -423,6 +438,14 @@ pub enum DataKey {
     Delegates(Address),
     /// Historical delegation snapshots for a creator.
     DelegationHistory(Address),
+    /// Vesting schedule record keyed by schedule ID.
+    VestingSchedule(u64),
+    /// Vesting schedules for a creator keyed by (creator, schedule_id).
+    CreatorVestingSchedules(Address, u64),
+    /// List of vesting schedule IDs for a creator.
+    CreatorVestingList(Address),
+    /// Global vesting schedule counter.
+    VestingScheduleCounter,
     /// Time-lock record keyed by lock ID.
     TimeLock(u64),
     /// Multi-sig withdrawal request keyed by request ID.
@@ -511,6 +534,18 @@ pub enum TipJarError {
     DelegationLimitExceeded = 47,
     /// Delegation duration must be greater than zero.
     InvalidDuration = 48,
+    /// Vesting schedule not found.
+    VestingScheduleNotFound = 49,
+    /// Vesting cliff period has not elapsed yet.
+    VestingCliffNotReached = 50,
+    /// No vested amount available to withdraw.
+    NoVestedAmount = 51,
+    /// Vesting schedule ID is invalid or zero.
+    InvalidVestingId = 52,
+    /// Vesting duration must be greater than zero.
+    InvalidVestingDuration = 53,
+    /// Cliff duration cannot exceed vesting duration.
+    CliffExceedsVesting = 54,
 }
 
 #[contract]
@@ -958,6 +993,215 @@ impl TipJarContract {
         let key = DataKey::CreatorTotal(creator.clone(), token.clone());
         env.storage().persistent().get(&key)
             .unwrap_or_else(|| env.storage().instance().get(&key).unwrap_or(0))
+    }
+
+    // ── vesting schedules ────────────────────────────────────────────────────
+
+    /// Creates a new vesting schedule for a tip.
+    ///
+    /// Parameters:
+    /// - `tipper`: The address that sent the tip
+    /// - `creator`: The address that will receive vested amounts
+    /// - `token`: The token being vested
+    /// - `amount`: Total amount to vest
+    /// - `cliff_duration`: Seconds until vesting begins
+    /// - `vesting_duration`: Total vesting period from start_time
+    ///
+    /// Emits: `("vest_new",)` with data `(creator, tipper, amount, start_time, vesting_duration, cliff_duration)`.
+    pub fn create_vesting_schedule(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        cliff_duration: u64,
+        vesting_duration: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if vesting_duration == 0 {
+            panic_with_error!(&env, TipJarError::InvalidVestingDuration);
+        }
+        if cliff_duration > vesting_duration {
+            panic_with_error!(&env, TipJarError::CliffExceedsVesting);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let now = env.ledger().timestamp();
+        let schedule_id: u64 = env.storage().instance().get(&DataKey::VestingScheduleCounter).unwrap_or(0);
+
+        let schedule = VestingSchedule {
+            id: schedule_id,
+            creator: creator.clone(),
+            tipper: tipper.clone(),
+            token: token.clone(),
+            total_amount: amount,
+            start_time: now,
+            cliff_duration,
+            vesting_duration,
+            withdrawn: 0,
+            created_at: now,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::VestingSchedule(schedule_id), &schedule);
+        
+        let mut schedules: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorVestingList(creator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        schedules.push_back(schedule_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorVestingList(creator.clone()), &schedules);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::VestingScheduleCounter, &(schedule_id + 1));
+
+        // Transfer tokens into contract for vesting
+        token::Client::new(&env, &token).transfer(&tipper, &env.current_contract_address(), &amount);
+
+        env.events().publish(
+            (symbol_short!("vest_new"),),
+            (creator, tipper, amount, now, vesting_duration, cliff_duration),
+        );
+
+        schedule_id
+    }
+
+    /// Calculates the vested amount for a schedule at the current ledger time.
+    fn calculate_vested_amount(env: &Env, schedule: &VestingSchedule) -> i128 {
+        let current_time = env.ledger().timestamp();
+
+        // No vesting until cliff is reached
+        if current_time < schedule.start_time + schedule.cliff_duration {
+            return 0;
+        }
+
+        let elapsed = current_time - schedule.start_time;
+
+        // Full vesting after vesting_duration has passed
+        if elapsed >= schedule.vesting_duration {
+            return schedule.total_amount;
+        }
+
+        // Linear vesting between cliff and end
+        (schedule.total_amount * elapsed as i128) / schedule.vesting_duration as i128
+    }
+
+    /// Returns the currently vested amount for a schedule.
+    pub fn get_vested_amount(env: Env, schedule_id: u64) -> i128 {
+        if schedule_id == 0 {
+            panic_with_error!(&env, TipJarError::InvalidVestingId);
+        }
+
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::VestingSchedule(schedule_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VestingScheduleNotFound));
+
+        Self::calculate_vested_amount(&env, &schedule)
+    }
+
+    /// Returns the available vested amount that can be withdrawn (vested - already withdrawn).
+    pub fn get_available_vested_amount(env: Env, schedule_id: u64) -> i128 {
+        if schedule_id == 0 {
+            panic_with_error!(&env, TipJarError::InvalidVestingId);
+        }
+
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::VestingSchedule(schedule_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VestingScheduleNotFound));
+
+        let vested = Self::calculate_vested_amount(&env, &schedule);
+        vested.saturating_sub(schedule.withdrawn)
+    }
+
+    /// Withdraws available vested amounts from a vesting schedule to the creator.
+    ///
+    /// Emits: `("vest_withdraw",)` with data `(creator, schedule_id, amount, token)`.
+    pub fn withdraw_vested(
+        env: Env,
+        creator: Address,
+        schedule_id: u64,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if schedule_id == 0 {
+            panic_with_error!(&env, TipJarError::InvalidVestingId);
+        }
+
+        let mut schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::VestingSchedule(schedule_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VestingScheduleNotFound));
+
+        if schedule.creator != creator {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let vested = Self::calculate_vested_amount(&env, &schedule);
+        let available = vested.saturating_sub(schedule.withdrawn);
+
+        if available <= 0 {
+            panic_with_error!(&env, TipJarError::NoVestedAmount);
+        }
+
+        schedule.withdrawn = schedule.withdrawn.checked_add(available).expect("withdrawn overflow");
+        env.storage()
+            .persistent()
+            .set(&DataKey::VestingSchedule(schedule_id), &schedule);
+
+        token::Client::new(&env, &schedule.token).transfer(
+            &env.current_contract_address(),
+            &creator,
+            &available,
+        );
+
+        env.events().publish(
+            (symbol_short!("vest_wdr"),),
+            (creator, schedule_id, available, schedule.token),
+        );
+
+        available
+    }
+
+    /// Returns the vesting schedule details.
+    pub fn get_vesting_schedule(env: Env, schedule_id: u64) -> Option<VestingSchedule> {
+        if schedule_id == 0 {
+            return None;
+        }
+        env.storage()
+            .persistent()
+            .get(&DataKey::VestingSchedule(schedule_id))
+    }
+
+    /// Returns all vesting schedule IDs for a creator.
+    pub fn get_creator_vesting_schedules(env: Env, creator: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CreatorVestingList(creator))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Returns the top N participants (tippers or creators) for a given time period.

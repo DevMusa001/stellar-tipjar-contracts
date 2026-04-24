@@ -40,3 +40,11 @@ path = "tests/tip_message_tests.rs"
 [[test]]
 name = "events_leaderboard_snapshot_tests"
 path = "tests/events_leaderboard_snapshot_tests.rs"
+
+[[test]]
+name = "withdrawal_limits_tests"
+path = "tests/withdrawal_limits_tests.rs"
+
+[[test]]
+name = "multisig_withdrawal_tests"
+path = "tests/multisig_withdrawal_tests.rs"

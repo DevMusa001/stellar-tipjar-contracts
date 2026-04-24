@@ -48,3 +48,7 @@ path = "tests/withdrawal_limits_tests.rs"
 [[test]]
 name = "multisig_withdrawal_tests"
 path = "tests/multisig_withdrawal_tests.rs"
+
+[[test]]
+name = "multi_token_tests"
+path = "tests/multi_token_tests.rs"

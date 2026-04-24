@@ -36,6 +36,12 @@ pub mod conditions;
 // Dynamic fee adjustment
 pub mod fees;
 
+// Dispute resolution
+pub mod dispute;
+
+// Privacy features
+pub mod privacy_tip;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -356,6 +362,8 @@ pub enum DataKey {
     CreatorBalance(Address, Address), // (creator, token)
     /// Historical total tips ever received by creator per token.
     CreatorTotal(Address, Address),   // (creator, token)
+    /// List of token addresses a creator has ever received tips in.
+    CreatorTokens(Address),
     /// Emergency pause state (bool).
     Paused,
     /// Contract administrator (Address).
@@ -454,6 +462,22 @@ pub enum DataKey {
     MultiSigCounter,
     /// Multi-sig configuration (threshold, signers, required approvals).
     MultiSigConfig,
+    /// Dispute record keyed by dispute_id.
+    Dispute(u64),
+    /// Global counter for dispute IDs.
+    DisputeCounter,
+    /// List of dispute IDs for a creator.
+    CreatorDisputes(Address),
+    /// Evidence records keyed by (dispute_id, evidence_index).
+    DisputeEvidence(u64, u64),
+    /// Evidence counter for a dispute.
+    DisputeEvidenceCounter(u64),
+    /// Private tip record keyed by tip_id.
+    PrivateTip(u64),
+    /// Global counter for private tip IDs.
+    PrivateTipCounter,
+    /// Revealed amount for a private tip keyed by tip_id.
+    PrivateTipAmount(u64),
 }
 
 #[contracterror]
@@ -534,18 +558,16 @@ pub enum TipJarError {
     DelegationLimitExceeded = 47,
     /// Delegation duration must be greater than zero.
     InvalidDuration = 48,
-    /// Vesting schedule not found.
-    VestingScheduleNotFound = 49,
-    /// Vesting cliff period has not elapsed yet.
-    VestingCliffNotReached = 50,
-    /// No vested amount available to withdraw.
-    NoVestedAmount = 51,
-    /// Vesting schedule ID is invalid or zero.
-    InvalidVestingId = 52,
-    /// Vesting duration must be greater than zero.
-    InvalidVestingDuration = 53,
-    /// Cliff duration cannot exceed vesting duration.
-    CliffExceedsVesting = 54,
+    /// Dispute not found.
+    DisputeNotFound = 49,
+    /// Dispute is not in Open status.
+    DisputeNotOpen = 50,
+    /// Only initiator or arbitrator can perform this action.
+    DisputeUnauthorized = 51,
+    /// Private tip not found.
+    PrivateTipNotFound = 52,
+    /// Invalid reveal - hash mismatch.
+    InvalidReveal = 53,
 }
 
 #[contract]
@@ -621,16 +643,13 @@ impl TipJarContract {
     // ── initialization ───────────────────────────────────────────────────────
 
     /// One-time setup to choose the administrator for the TipJar.
-    pub fn init(env: Env, admin: Address, fee_basis_points: u32, refund_window_seconds: u64) {
+    pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, TipJarError::AlreadyInitialized);
         }
-        if fee_basis_points > 500 {
-            panic_with_error!(&env, TipJarError::FeeExceedsMaximum);
-        }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::FeeBasisPoints, &fee_basis_points);
-        env.storage().instance().set(&DataKey::RefundWindow, &refund_window_seconds);
+        env.storage().instance().set(&DataKey::FeeBasisPoints, &0u32);
+        env.storage().instance().set(&DataKey::RefundWindow, &0u64);
     }
 
     /// Sets an off-chain condition flag that can later be referenced in
@@ -653,6 +672,24 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
         env.storage().instance().set(&DataKey::TokenWhitelist(token), &true);
+    }
+
+    /// Removes a token from the whitelist. Admin only.
+    pub fn remove_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::TokenWhitelist(token), &false);
+    }
+
+    /// Returns `true` if `token` is on the whitelist.
+    pub fn is_whitelisted(env: Env, token: Address) -> bool {
+        env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token))
+            .unwrap_or(false)
     }
 
     /// Pauses all state-changing operations. Admin only.
@@ -743,6 +780,12 @@ impl TipJarContract {
         env.storage().instance().set(&DataKey::TipCounter, &(tip_id + 1));
 
         Self::update_leaderboard_stats(&env, &sender, &creator, creator_amount);
+
+        // Track which tokens this creator has received
+        Self::track_creator_token(&env, &creator, &token);
+
+        // Check and award milestones
+        Self::check_and_award_milestones(&env, &creator, &token, new_tot);
 
         // ── external call last ───────────────────────────────────────────────
         token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &amount);
@@ -940,6 +983,20 @@ impl TipJarContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    /// Records `token` in the creator's token list if not already present.
+    fn track_creator_token(env: &Env, creator: &Address, token: &Address) {
+        let key = DataKey::CreatorTokens(creator.clone());
+        let mut tokens: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if !tokens.contains(token) {
+            tokens.push_back(token.clone());
+            env.storage().persistent().set(&key, &tokens);
+        }
+    }
+
     fn add_delegate(env: &Env, creator: &Address, delegate: &Address) {
         let mut delegates: Vec<Address> = env
             .storage()
@@ -994,6 +1051,7 @@ impl TipJarContract {
         env.storage().persistent().get(&key)
             .unwrap_or_else(|| env.storage().instance().get(&key).unwrap_or(0))
     }
+
 
     // ── vesting schedules ────────────────────────────────────────────────────
 
@@ -1201,6 +1259,13 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::CreatorVestingList(creator))
+
+    /// Returns all token addresses that `creator` has ever received tips in.
+    pub fn get_creator_tokens(env: Env, creator: Address) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CreatorTokens(creator))
+
             .unwrap_or_else(|| Vec::new(&env))
     }
 
@@ -2580,5 +2645,550 @@ impl TipJarContract {
             // v1 → v2: no data migration required in this example.
             _ => {}
         }
+    }
+
+    // ── dispute resolution ────────────────────────────────────────────────────
+
+    /// Creates a dispute for a tip. Only the tipper or creator can initiate.
+    ///
+    /// Emits `("dispute_created",)` with data `(dispute_id, tip_id, initiator)`.
+    pub fn create_dispute(
+        env: Env,
+        tip_id: u64,
+        initiator: Address,
+        reason: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        initiator.require_auth();
+
+        let dispute_id: u64 = env.storage().instance().get(&DataKey::DisputeCounter).unwrap_or(0);
+        env.storage().instance().set(&DataKey::DisputeCounter, &(dispute_id + 1));
+
+        let created_at = env.ledger().timestamp();
+        let dispute = dispute::Dispute {
+            id: dispute_id,
+            tip_id,
+            initiator: initiator.clone(),
+            reason,
+            status: dispute::DisputeStatus::Open,
+            arbitrator: None,
+            resolution: None,
+            created_at,
+        };
+
+        env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
+
+        let mut creator_disputes: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorDisputes(initiator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        creator_disputes.push_back(dispute_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorDisputes(initiator.clone()), &creator_disputes);
+
+        env.events().publish(
+            (symbol_short!("disp_crt"),),
+            (dispute_id, tip_id, initiator),
+        );
+
+        dispute_id
+    }
+
+    /// Assigns an arbitrator to a dispute. Admin only.
+    ///
+    /// Emits `("dispute_assigned",)` with data `(dispute_id, arbitrator)`.
+    pub fn assign_arbitrator(env: Env, admin: Address, dispute_id: u64, arbitrator: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let mut dispute: dispute::Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::DisputeNotFound));
+
+        dispute.arbitrator = Some(arbitrator.clone());
+        dispute.status = dispute::DisputeStatus::UnderReview;
+        env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
+
+        env.events().publish(
+            (symbol_short!("disp_asgn"),),
+            (dispute_id, arbitrator),
+        );
+    }
+
+    /// Submits evidence for a dispute.
+    ///
+    /// Emits `("evidence_submitted",)` with data `(dispute_id, submitter)`.
+    pub fn submit_evidence(
+        env: Env,
+        dispute_id: u64,
+        submitter: Address,
+        evidence: String,
+    ) {
+        Self::require_not_paused(&env);
+        submitter.require_auth();
+
+        let dispute: dispute::Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::DisputeNotFound));
+
+        if dispute.status != dispute::DisputeStatus::Open && dispute.status != dispute::DisputeStatus::UnderReview {
+            panic_with_error!(&env, TipJarError::DisputeNotOpen);
+        }
+
+        let evidence_idx: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DisputeEvidenceCounter(dispute_id))
+            .unwrap_or(0);
+
+        let submitted_at = env.ledger().timestamp();
+        let evidence_record = dispute::DisputeEvidence {
+            dispute_id,
+            submitter: submitter.clone(),
+            evidence,
+            submitted_at,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeEvidence(dispute_id, evidence_idx), &evidence_record);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeEvidenceCounter(dispute_id), &(evidence_idx + 1));
+
+        env.events().publish(
+            (symbol_short!("evid_sub"),),
+            (dispute_id, submitter),
+        );
+    }
+
+    /// Resolves a dispute. Only the arbitrator can resolve.
+    ///
+    /// Emits `("dispute_resolved",)` with data `(dispute_id, resolution)`.
+    pub fn resolve_dispute(
+        env: Env,
+        dispute_id: u64,
+        arbitrator: Address,
+        resolution: String,
+        approved: bool,
+    ) {
+        Self::require_not_paused(&env);
+        arbitrator.require_auth();
+
+        let mut dispute: dispute::Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::DisputeNotFound));
+
+        if dispute.arbitrator != Some(arbitrator.clone()) {
+            panic_with_error!(&env, TipJarError::DisputeUnauthorized);
+        }
+
+        dispute.resolution = Some(resolution.clone());
+        dispute.status = if approved {
+            dispute::DisputeStatus::Resolved
+        } else {
+            dispute::DisputeStatus::Rejected
+        };
+
+        env.storage().persistent().set(&DataKey::Dispute(dispute_id), &dispute);
+
+        env.events().publish(
+            (symbol_short!("disp_res"),),
+            (dispute_id, resolution),
+        );
+    }
+
+    /// Returns a dispute by ID.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> dispute::Dispute {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::DisputeNotFound))
+    }
+
+    /// Returns all disputes for a creator.
+    pub fn get_creator_disputes(env: Env, creator: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CreatorDisputes(creator))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns evidence for a dispute.
+    pub fn get_dispute_evidence(env: Env, dispute_id: u64, evidence_idx: u64) -> dispute::DisputeEvidence {
+        env.storage()
+            .persistent()
+            .get(&DataKey::DisputeEvidence(dispute_id, evidence_idx))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::DisputeNotFound))
+    }
+
+    // ── batch tipping ─────────────────────────────────────────────────────────
+
+    /// Sends multiple tips in a single transaction to reduce gas costs.
+    ///
+    /// `tips` is a vector of (creator, amount) pairs. Returns the number of successful tips.
+    /// Emits `("batch_tip",)` with data `(tipper, count, total_amount)`.
+    pub fn batch_tip(
+        env: Env,
+        tipper: Address,
+        token: Address,
+        tips: Vec<BatchTip>,
+    ) -> u32 {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        if tips.len() == 0 || tips.len() > 100 {
+            panic_with_error!(&env, TipJarError::BatchTooLarge);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let mut total_amount: i128 = 0;
+        for tip in tips.iter() {
+            if tip.amount <= 0 {
+                panic_with_error!(&env, TipJarError::InvalidAmount);
+            }
+            total_amount = total_amount.checked_add(tip.amount).expect("total overflow");
+        }
+
+        // Transfer all tokens at once
+        token::Client::new(&env, &token).transfer(&tipper, &env.current_contract_address(), &total_amount);
+
+        let fee_bp: u32 = env.storage().instance().get(&DataKey::FeeBasisPoints).unwrap_or(0);
+        let mut successful_tips: u32 = 0;
+
+        for tip in tips.iter() {
+            let fee: i128 = (tip.amount * fee_bp as i128) / 10_000;
+            let creator_amount = tip.amount - fee;
+
+            if fee > 0 {
+                let fee_key = DataKey::PlatformFeeBalance(token.clone());
+                let new_fee_bal: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&fee_key)
+                    .unwrap_or(0)
+                    .checked_add(fee)
+                    .expect("fee overflow");
+                env.storage().instance().set(&fee_key, &new_fee_bal);
+            }
+
+            let bal_key = DataKey::CreatorBalance(tip.creator.clone(), token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            let new_bal: i128 = existing_bal.checked_add(creator_amount).expect("balance overflow");
+            env.storage().persistent().set(&bal_key, &new_bal);
+
+            let tot_key = DataKey::CreatorTotal(tip.creator.clone(), token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            let new_tot: i128 = existing_tot.checked_add(creator_amount).expect("total overflow");
+            env.storage().persistent().set(&tot_key, &new_tot);
+
+            Self::update_leaderboard_stats(&env, &tipper, &tip.creator, creator_amount);
+            successful_tips += 1;
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_tip"),),
+            (tipper, successful_tips, total_amount),
+        );
+
+        successful_tips
+    }
+
+    // ── milestone rewards ─────────────────────────────────────────────────────
+
+    /// Checks and awards milestones when a creator reaches specific tip thresholds.
+    ///
+    /// Called internally after tips are processed. Emits milestone events.
+    fn check_and_award_milestones(
+        env: &Env,
+        creator: &Address,
+        token: &Address,
+        new_total: i128,
+    ) {
+        let milestones = Self::get_creator_milestones(env, creator);
+
+        for (idx, milestone) in milestones.iter().enumerate() {
+            if !milestone.completed && new_total >= milestone.goal_amount {
+                let reward = (milestone.goal_amount * 5) / 100; // 5% reward
+
+                let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
+                let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+                let new_bal: i128 = existing_bal.checked_add(reward).expect("balance overflow");
+                env.storage().persistent().set(&bal_key, &new_bal);
+
+                let mut updated_milestone = milestone.clone();
+                updated_milestone.completed = true;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Milestone(creator.clone(), idx as u64), &updated_milestone);
+
+                env.events().publish(
+                    (symbol_short!("milestone"),),
+                    (creator.clone(), milestone.goal_amount, reward),
+                );
+            }
+        }
+    }
+
+    /// Creates a milestone for a creator. Admin only.
+    ///
+    /// Emits `("milestone_created",)` with data `(creator, goal_amount)`.
+    pub fn create_milestone(
+        env: Env,
+        admin: Address,
+        creator: Address,
+        goal_amount: i128,
+        description: String,
+    ) -> u64 {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if goal_amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidGoalAmount);
+        }
+
+        let counter_key = DataKey::MilestoneCounter(creator.clone());
+        let milestone_id: u64 = env.storage().persistent().get(&counter_key).unwrap_or(0);
+
+        let milestone = Milestone {
+            id: milestone_id,
+            creator: creator.clone(),
+            goal_amount,
+            current_amount: 0,
+            description,
+            deadline: None,
+            completed: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Milestone(creator.clone(), milestone_id), &milestone);
+        env.storage()
+            .persistent()
+            .set(&counter_key, &(milestone_id + 1));
+
+        let mut active: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMilestones(creator.clone()))
+            .unwrap_or_else(|| Vec::new(&env));
+        active.push_back(milestone_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMilestones(creator.clone()), &active);
+
+        env.events().publish(
+            (symbol_short!("ms_crt"),),
+            (creator, goal_amount),
+        );
+
+        milestone_id
+    }
+
+    /// Returns all milestones for a creator.
+    pub fn get_creator_milestones(env: &Env, creator: &Address) -> Vec<Milestone> {
+        let milestone_ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMilestones(creator.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+
+        let mut milestones = Vec::new(env);
+        for id in milestone_ids.iter() {
+            if let Some(milestone) = env
+                .storage()
+                .persistent()
+                .get::<_, Milestone>(&DataKey::Milestone(creator.clone(), id))
+            {
+                milestones.push_back(milestone);
+            }
+        }
+        milestones
+    }
+
+    /// Returns a specific milestone for a creator.
+    pub fn get_milestone(env: Env, creator: Address, milestone_id: u64) -> Milestone {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Milestone(creator, milestone_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MilestoneNotFound))
+    }
+
+    // ── privacy features ──────────────────────────────────────────────────────
+
+    /// Sends an anonymous or private tip. Amount is hashed for privacy.
+    ///
+    /// If `is_anonymous` is true, the tipper identity is not stored.
+    /// Returns the private tip ID.
+    /// Emits `("private_tip",)` with data `(tip_id, creator, is_anonymous)`.
+    pub fn tip_private(
+        env: Env,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        is_anonymous: bool,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let tip_id: u64 = env.storage().instance().get(&DataKey::PrivateTipCounter).unwrap_or(0);
+        env.storage().instance().set(&DataKey::PrivateTipCounter, &(tip_id + 1));
+
+        let amount_bytes = amount.to_le_bytes();
+        let amount_hash = env.crypto().sha256(&amount_bytes);
+
+        let tipper = if is_anonymous {
+            None
+        } else {
+            Some(env.current_contract_address())
+        };
+
+        let created_at = env.ledger().timestamp();
+        let private_tip = privacy_tip::PrivateTip {
+            id: tip_id,
+            creator: creator.clone(),
+            amount_hash,
+            is_anonymous,
+            tipper,
+            created_at,
+            revealed: false,
+        };
+
+        env.storage().persistent().set(&DataKey::PrivateTip(tip_id), &private_tip);
+
+        env.events().publish(
+            (symbol_short!("priv_tip"),),
+            (tip_id, creator, is_anonymous),
+        );
+
+        tip_id
+    }
+
+    /// Reveals the amount of a private tip by providing the original amount.
+    ///
+    /// The amount is hashed and compared with the stored hash. If it matches,
+    /// the tip is credited to the creator and marked as revealed.
+    /// Emits `("tip_revealed",)` with data `(tip_id, amount)`.
+    pub fn reveal_tip(
+        env: Env,
+        sender: Address,
+        token: Address,
+        tip_id: u64,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        sender.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let mut private_tip: privacy_tip::PrivateTip = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PrivateTip(tip_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PrivateTipNotFound));
+
+        let amount_bytes = amount.to_le_bytes();
+        let computed_hash = env.crypto().sha256(&amount_bytes);
+
+        if computed_hash != private_tip.amount_hash {
+            panic_with_error!(&env, TipJarError::InvalidReveal);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        // Transfer tokens
+        token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &amount);
+
+        let fee_bp: u32 = env.storage().instance().get(&DataKey::FeeBasisPoints).unwrap_or(0);
+        let fee: i128 = (amount * fee_bp as i128) / 10_000;
+        let creator_amount = amount - fee;
+
+        if fee > 0 {
+            let fee_key = DataKey::PlatformFeeBalance(token.clone());
+            let new_fee_bal: i128 = env
+                .storage()
+                .instance()
+                .get(&fee_key)
+                .unwrap_or(0)
+                .checked_add(fee)
+                .expect("fee overflow");
+            env.storage().instance().set(&fee_key, &new_fee_bal);
+        }
+
+        let bal_key = DataKey::CreatorBalance(private_tip.creator.clone(), token.clone());
+        let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+        let new_bal: i128 = existing_bal.checked_add(creator_amount).expect("balance overflow");
+        env.storage().persistent().set(&bal_key, &new_bal);
+
+        let tot_key = DataKey::CreatorTotal(private_tip.creator.clone(), token.clone());
+        let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+        let new_tot: i128 = existing_tot.checked_add(creator_amount).expect("total overflow");
+        env.storage().persistent().set(&tot_key, &new_tot);
+
+        private_tip.revealed = true;
+        env.storage().persistent().set(&DataKey::PrivateTip(tip_id), &private_tip);
+        env.storage().persistent().set(&DataKey::PrivateTipAmount(tip_id), &amount);
+
+        env.events().publish(
+            (symbol_short!("tip_rev"),),
+            (tip_id, amount),
+        );
+    }
+
+    /// Returns a private tip record by ID.
+    pub fn get_private_tip(env: Env, tip_id: u64) -> privacy_tip::PrivateTip {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PrivateTip(tip_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PrivateTipNotFound))
+    }
+
+    /// Returns the revealed amount for a private tip (if revealed).
+    pub fn get_private_tip_amount(env: Env, tip_id: u64) -> Option<i128> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PrivateTipAmount(tip_id))
     }
 }

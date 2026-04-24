@@ -260,6 +260,35 @@ pub struct TimeLock {
     pub cancelled: bool,
 }
 
+/// A pending multi-signature withdrawal request.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigWithdrawal {
+    pub request_id: u64,
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub approvals: Vec<Address>,
+    pub required_approvals: u32,
+    pub expires_at: u64,
+    pub executed: bool,
+    pub cancelled: bool,
+}
+
+/// Per-contract multi-sig configuration set by admin.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigConfig {
+    /// Withdrawal amount above which multi-sig is required (0 = always require).
+    pub threshold: i128,
+    /// Number of approvals needed to execute.
+    pub required_approvals: u32,
+    /// Seconds until a pending request expires.
+    pub expiry_seconds: u64,
+    /// Authorised signers.
+    pub signers: Vec<Address>,
+}
+
 /// Leaderboard category selector.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -363,6 +392,12 @@ pub enum DataKey {
     CreatorLocks(Address),
     /// Time-lock record keyed by lock ID.
     TimeLock(u64),
+    /// Multi-sig withdrawal request keyed by request ID.
+    MultiSigRequest(u64),
+    /// Global counter for multi-sig request IDs.
+    MultiSigCounter,
+    /// Multi-sig configuration (threshold, signers, required approvals).
+    MultiSigConfig,
 }
 
 #[contracterror]
@@ -421,6 +456,18 @@ pub enum TipJarError {
     WithdrawalCooldown = 36,
     /// Withdrawal would exceed the creator's daily limit.
     DailyLimitExceeded = 37,
+    /// Multi-sig request not found.
+    MultiSigRequestNotFound = 38,
+    /// Multi-sig request has expired.
+    MultiSigRequestExpired = 39,
+    /// Multi-sig request has already been executed or cancelled.
+    MultiSigRequestClosed = 40,
+    /// Approver is not in the authorised signer list.
+    NotASigner = 41,
+    /// Approver has already approved this request.
+    AlreadyApproved = 42,
+    /// Multi-sig config has not been set.
+    MultiSigNotConfigured = 43,
 }
 
 #[contract]
@@ -1626,6 +1673,212 @@ impl TipJarContract {
                 withdrawn_today: 0,
                 day_start: 0,
             })
+    }
+
+    // ── multi-signature withdrawals ───────────────────────────────────────────
+
+    /// Sets the multi-sig configuration. Admin only.
+    ///
+    /// `threshold` — amounts strictly above this require multi-sig (0 = all withdrawals).
+    /// Emits `("ms_cfg",)` with data `(threshold, required_approvals, expiry_seconds)`.
+    pub fn set_multisig_config(
+        env: Env,
+        admin: Address,
+        threshold: i128,
+        required_approvals: u32,
+        expiry_seconds: u64,
+        signers: Vec<Address>,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if required_approvals == 0 || required_approvals as u32 > signers.len() {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        let cfg = MultiSigConfig { threshold, required_approvals, expiry_seconds, signers };
+        env.storage().instance().set(&DataKey::MultiSigConfig, &cfg);
+        env.events().publish(
+            (symbol_short!("ms_cfg"),),
+            (threshold, required_approvals, expiry_seconds),
+        );
+    }
+
+    /// Creates a multi-sig withdrawal request for `amount` of `token`.
+    ///
+    /// If `amount` is at or below the configured threshold the withdrawal is
+    /// processed immediately (no multi-sig needed) and returns `0`.
+    /// Otherwise a pending request is created and its ID is returned.
+    ///
+    /// Emits `("ms_req", creator)` with data `(request_id, amount, expires_at)`.
+    pub fn request_multisig_withdrawal(
+        env: Env,
+        creator: Address,
+        token: Address,
+        amount: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
+        let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+        if balance == 0 || amount <= 0 || amount > balance {
+            panic_with_error!(&env, TipJarError::NothingToWithdraw);
+        }
+
+        let cfg: MultiSigConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::MultiSigConfig)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigNotConfigured));
+
+        // Below-or-at threshold: process immediately.
+        if cfg.threshold > 0 && amount <= cfg.threshold {
+            Self::check_and_update_withdrawal_limits(&env, &creator, amount);
+            env.storage().persistent().set(&bal_key, &(balance - amount));
+            token::Client::new(&env, &token).transfer(
+                &env.current_contract_address(),
+                &creator,
+                &amount,
+            );
+            events::emit_withdraw_event(&env, &creator, amount, &token);
+            return 0;
+        }
+
+        // Above threshold: create pending request.
+        let request_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MultiSigCounter)
+            .unwrap_or(0);
+        env.storage().instance().set(&DataKey::MultiSigCounter, &(request_id + 1));
+
+        let expires_at = env.ledger().timestamp() + cfg.expiry_seconds;
+        let request = MultiSigWithdrawal {
+            request_id,
+            creator: creator.clone(),
+            token,
+            amount,
+            approvals: Vec::new(&env),
+            required_approvals: cfg.required_approvals,
+            expires_at,
+            executed: false,
+            cancelled: false,
+        };
+        env.storage().persistent().set(&DataKey::MultiSigRequest(request_id), &request);
+
+        env.events().publish(
+            (symbol_short!("ms_req"), creator),
+            (request_id, amount, expires_at),
+        );
+        request_id
+    }
+
+    /// Approves a pending multi-sig withdrawal request.
+    ///
+    /// Once `required_approvals` is reached the withdrawal is executed automatically.
+    /// Emits `("ms_apr", approver)` with data `request_id`.
+    /// Emits `("ms_exe", creator)` with data `(request_id, amount)` on execution.
+    pub fn approve_withdrawal(env: Env, approver: Address, request_id: u64) {
+        Self::require_not_paused(&env);
+        approver.require_auth();
+
+        let cfg: MultiSigConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::MultiSigConfig)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigNotConfigured));
+
+        if !cfg.signers.contains(&approver) {
+            panic_with_error!(&env, TipJarError::NotASigner);
+        }
+
+        let mut request: MultiSigWithdrawal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MultiSigRequest(request_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound));
+
+        if request.executed || request.cancelled {
+            panic_with_error!(&env, TipJarError::MultiSigRequestClosed);
+        }
+        if env.ledger().timestamp() > request.expires_at {
+            panic_with_error!(&env, TipJarError::MultiSigRequestExpired);
+        }
+        if request.approvals.contains(&approver) {
+            panic_with_error!(&env, TipJarError::AlreadyApproved);
+        }
+
+        request.approvals.push_back(approver.clone());
+        env.events().publish((symbol_short!("ms_apr"), approver), request_id);
+
+        if request.approvals.len() >= request.required_approvals {
+            // Execute withdrawal.
+            let bal_key = DataKey::CreatorBalance(request.creator.clone(), request.token.clone());
+            let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            if balance < request.amount {
+                panic_with_error!(&env, TipJarError::InsufficientBalance);
+            }
+            env.storage().persistent().set(&bal_key, &(balance - request.amount));
+            request.executed = true;
+            env.storage().persistent().set(&DataKey::MultiSigRequest(request_id), &request);
+
+            token::Client::new(&env, &request.token).transfer(
+                &env.current_contract_address(),
+                &request.creator,
+                &request.amount,
+            );
+            env.events().publish(
+                (symbol_short!("ms_exe"), request.creator.clone()),
+                (request_id, request.amount),
+            );
+        } else {
+            env.storage().persistent().set(&DataKey::MultiSigRequest(request_id), &request);
+        }
+    }
+
+    /// Cancels a pending multi-sig withdrawal request.
+    ///
+    /// Only the original creator or admin may cancel.
+    /// Emits `("ms_cncl", creator)` with data `request_id`.
+    pub fn cancel_multisig_withdrawal(env: Env, caller: Address, request_id: u64) {
+        caller.require_auth();
+
+        let mut request: MultiSigWithdrawal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MultiSigRequest(request_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound));
+
+        if request.executed || request.cancelled {
+            panic_with_error!(&env, TipJarError::MultiSigRequestClosed);
+        }
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != request.creator && caller != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        request.cancelled = true;
+        env.storage().persistent().set(&DataKey::MultiSigRequest(request_id), &request);
+        env.events().publish((symbol_short!("ms_cncl"), request.creator), request_id);
+    }
+
+    /// Returns a multi-sig withdrawal request by ID.
+    pub fn get_multisig_request(env: Env, request_id: u64) -> MultiSigWithdrawal {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MultiSigRequest(request_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound))
+    }
+
+    /// Returns the current multi-sig configuration.
+    pub fn get_multisig_config(env: Env) -> MultiSigConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::MultiSigConfig)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigNotConfigured))
     }
 
     // ── upgrade / migration ───────────────────────────────────────────────────

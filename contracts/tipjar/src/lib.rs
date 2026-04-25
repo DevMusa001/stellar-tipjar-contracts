@@ -200,6 +200,69 @@ pub struct TipHistoryQuery {
     pub offset: u32,
 }
 
+/// Insurance pool configuration.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsurancePoolConfig {
+    pub min_contribution: i128,
+    pub max_contribution: i128,
+    pub premium_rate_bps: u32,
+    pub payout_ratio_bps: u32,
+    pub claim_cooldown: u64,
+    pub admin_fee_bps: u32,
+    pub tip_premium_bps: u32,
+}
+
+/// Current state of the insurance pool for a specific token.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsurancePool {
+    pub token: Address,
+    pub total_reserves: i128,
+    pub total_contributions: i128,
+    pub total_claims_paid: i128,
+    pub active_claims: u32,
+    pub total_claims: u32,
+    pub last_payout_time: u64,
+}
+
+/// An insurance claim submitted by a creator for a failed transaction.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InsuranceClaim {
+    pub claim_id: u64,
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub tx_hash: BytesN<32>,
+    pub status: ClaimStatus,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub last_claim_at: u64,
+}
+
+/// Status of an insurance claim.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ClaimStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Paid,
+}
+
+/// Premium information for a creator's contribution.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PremiumInfo {
+    pub creator: Address,
+    pub token: Address,
+    pub total_contributed: i128,
+    pub coverage_amount: i128,
+    pub last_claim_at: u64,
+    pub active_claims: u32,
+}
+
 /// Role enum for role-based access control.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -424,7 +487,7 @@ pub enum DataKey {
     /// Individual matching program by ID.
     MatchingProgram(u64),
     /// Matching program IDs indexed under a creator.
-    CreatorMatchingPrograms(Address),
+    CrMatchProgs(Address),
     /// Individual tip record by global tip ID.
     TipRecord(u64),
     /// Global tip counter for assigning tip IDs.
@@ -460,7 +523,7 @@ pub enum DataKey {
     /// Per-creator withdrawal rate-limit state.
     WithdrawalLimits(Address),
     /// Platform-wide default withdrawal limits applied when no per-creator config exists.
-    DefaultWithdrawalLimits,
+    DefWithdrawLimits,
     /// Next time-lock ID counter (u64).
     NextLockId,
     /// List of lock IDs belonging to a creator.
@@ -480,7 +543,7 @@ pub enum DataKey {
     /// List of vesting schedule IDs for a creator.
     CreatorVestingList(Address),
     /// Global vesting schedule counter.
-    VestingScheduleCounter,
+    VestingSchedCtr,
     /// Stream record keyed by stream ID.
     Stream(u64),
     /// List of stream IDs for a creator.
@@ -513,6 +576,30 @@ pub enum DataKey {
     PrivateTipCounter,
     /// Revealed amount for a private tip keyed by tip_id.
     PrivateTipAmount(u64),
+    /// Insurance pool configuration.
+    InsPoolCfg,
+    /// Insurance pool state per token.
+    InsPoolToken(Address),
+    /// Insurance claim record keyed by claim ID.
+    InsClaim(u64),
+    /// Global counter for insurance claim IDs.
+    InsClaimCtr,
+    /// Creator's insurance contribution per token.
+    InsContrib(Address, Address),
+    /// Creator's last claim timestamp per token.
+    InsLastClm(Address, Address),
+    /// Creator's active claim count per token.
+    InsActiveClms(Address, Address),
+    /// Total number of claims for a creator per token.
+    InsTotalClms(Address, Address),
+    /// Insurance feature enabled flag.
+    InsEnabled,
+    /// Max active claims per creator.
+    InsMaxClms,
+    /// Insurance admin address.
+    InsAdmin,
+    /// List of claim IDs for a creator per token.
+    InsClms(Address, Address),
 }
 
 #[contracterror]
@@ -534,8 +621,8 @@ pub enum TipJarError {
     InvalidUnlockTime = 13,
     TipStillLocked = 14,
     LockedTipNotFound = 15,
-    MatchingProgramNotFound = 16,
-    MatchingProgramInactive = 17,
+    MatchProgNotFound = 16,
+    MatchProgInactive = 17,
     InvalidMatchRatio = 18,
     DexNotConfigured = 19,
     NftNotConfigured = 20,
@@ -572,11 +659,11 @@ pub enum TipJarError {
     /// Withdrawal would exceed the creator's daily limit.
     DailyLimitExceeded = 37,
     /// Multi-sig request not found.
-    MultiSigRequestNotFound = 38,
+    MsigReqNotFound = 38,
     /// Multi-sig request has expired.
-    MultiSigRequestExpired = 39,
+    MultiSigReqExpired = 39,
     /// Multi-sig request has already been executed or cancelled.
-    MultiSigRequestClosed = 40,
+    MultiSigReqClosed = 40,
     /// Approver is not in the authorised signer list.
     NotASigner = 41,
     /// Approver has already approved this request.
@@ -599,26 +686,58 @@ pub enum TipJarError {
     DisputeNotOpen = 50,
     /// Only initiator or arbitrator can perform this action.
     DisputeUnauthorized = 51,
+    /// Insurance pool not configured.
+    InsPoolNotCfg = 52,
+    /// Contribution amount below minimum.
+    ContributionTooLow = 53,
+    /// Contribution amount exceeds maximum.
+    ContributionTooHigh = 54,
+    /// No insurance coverage for this creator/token.
+    NoCoverage = 55,
+    /// Claim has not been approved.
+    ClaimNotApproved = 56,
+    /// Claim already paid out.
+    ClaimAlreadyPaid = 57,
+    /// Insufficient reserves in pool.
+    InsufficientReserves = 58,
+    /// Claim cooldown period not elapsed.
+    ClaimCooldownActive = 59,
+    /// Too many active claims for this creator.
+    TooManyActiveClaims = 60,
+    /// Claim not found.
+    ClaimNotFound = 61,
+    /// Already contributed to pool this period.
+    AlreadyContributed = 62,
+    /// Insurance feature is disabled.
+    InsuranceDisabled = 63,
+    /// Previous claim must be resolved first.
+    PendingClaimExists = 64,
+    /// Payout would exceed pool reserves.
+    PayoutExceedsReserves = 65,
+    /// Invalid claim amount.
+    InvalidClaimAmount = 66,
+    /// Admin approval required for claim.
+    AdmAppReq = 67,
     /// Private tip not found.
-    PrivateTipNotFound = 52,
+    PrivateTipNotFound = 68,
     /// Invalid reveal - hash mismatch.
-    InvalidReveal = 53,
+    InvalidReveal = 69,
     /// Stream not found.
-    StreamNotFound = 54,
+    StreamNotFound = 70,
     /// Stream has already been cancelled.
-    StreamAlreadyCancelled = 55,
+    StreamAlreadyCancelled = 71,
     /// Stream has not started yet.
-    StreamNotStarted = 56,
+    StreamNotStarted = 72,
     /// Stream has already completed.
-    StreamAlreadyCompleted = 57,
+    StreamAlreadyCompleted = 73,
     /// Invalid stream amount.
-    InvalidStreamAmount = 58,
+    InvalidStreamAmount = 74,
     /// Invalid stream rate (amount per second).
-    InvalidStreamRate = 59,
+    InvalidStreamRate = 75,
     /// No streamed amount available to withdraw.
-    NoStreamedAmount = 60,
+    NoStreamedAmount = 76,
     /// Stream rate exceeds maximum allowed (1000 tokens/second).
-    StreamRateExceedsMaximum = 61,
+    StrmRateMax = 77,
 }
 
 #[contract]
@@ -802,19 +921,45 @@ impl TipJarContract {
 
         let fee_bp: u32 = env.storage().instance().get(&DataKey::FeeBasisPoints).unwrap_or(0);
         let fee: i128 = (amount * fee_bp as i128) / 10_000;
-        let creator_amount = amount.checked_sub(fee).unwrap_or(0);
+
+        // --- Insurance Premium Calculation ---
+        let ins_enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        let mut ins_premium: i128 = 0;
+        if ins_enabled {
+            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::InsPoolCfg) {
+                ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
+            }
+        }
+
+        let creator_amount = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
 
         // ── state updates before external call (CEI pattern) ─────────────────
         if fee > 0 {
             let fee_key = DataKey::PlatformFeeBalance(token.clone());
-            let new_fee_bal: i128 = env
-                .storage()
-                .instance()
-                .get(&fee_key)
-                .unwrap_or(0)
+            let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            let new_fee_bal: i128 = current_fee
                 .checked_add(fee)
                 .expect("fee overflow");
             env.storage().instance().set(&fee_key, &new_fee_bal);
+        }
+
+        if ins_premium > 0 {
+            let pool_key = DataKey::InsPoolToken(token.clone());
+            let mut pool: InsurancePool = env
+                .storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or_else(|| InsurancePool {
+                    token: token.clone(),
+                    total_reserves: 0,
+                    total_contributions: 0,
+                    total_claims_paid: 0,
+                    active_claims: 0,
+                    total_claims: 0,
+                    last_payout_time: env.ledger().timestamp(),
+                });
+            pool.total_reserves += ins_premium;
+            env.storage().persistent().set(&pool_key, &pool);
         }
 
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
@@ -1149,7 +1294,7 @@ impl TipJarContract {
         }
 
         let now = env.ledger().timestamp();
-        let schedule_id: u64 = env.storage().instance().get(&DataKey::VestingScheduleCounter).unwrap_or(0);
+        let schedule_id: u64 = env.storage().instance().get(&DataKey::VestingSchedCtr).unwrap_or(0);
 
         let schedule = VestingSchedule {
             id: schedule_id,
@@ -1180,7 +1325,7 @@ impl TipJarContract {
 
         env.storage()
             .instance()
-            .set(&DataKey::VestingScheduleCounter, &(schedule_id + 1));
+            .set(&DataKey::VestingSchedCtr, &(schedule_id + 1));
 
         // Transfer tokens into contract for vesting
         token::Client::new(&env, &token).transfer(&tipper, &env.current_contract_address(), &amount);
@@ -1310,13 +1455,14 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::CreatorVestingList(creator))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
 
     /// Returns all token addresses that `creator` has ever received tips in.
     pub fn get_creator_tokens(env: Env, creator: Address) -> Vec<Address> {
         env.storage()
             .persistent()
             .get(&DataKey::CreatorTokens(creator))
-
             .unwrap_or_else(|| Vec::new(&env))
     }
 
@@ -1462,7 +1608,17 @@ impl TipJarContract {
             _ => fees::CongestionLevel::Normal,
         };
         let (fee, fee_bps) = fees::compute_fee(&env, amount, level);
-        let net = amount - fee;
+        
+        // --- Insurance Premium Calculation ---
+        let ins_enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        let mut ins_premium: i128 = 0;
+        if ins_enabled {
+            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::InsPoolCfg) {
+                ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
+            }
+        }
+
+        let net = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
 
         token::Client::new(&env, &token).transfer(
             &sender,
@@ -1470,13 +1626,34 @@ impl TipJarContract {
             &amount,
         );
 
+        if ins_premium > 0 {
+            let pool_key = DataKey::InsPoolToken(token.clone());
+            let mut pool: InsurancePool = env
+                .storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or_else(|| InsurancePool {
+                    token: token.clone(),
+                    total_reserves: 0,
+                    total_contributions: 0,
+                    total_claims_paid: 0,
+                    active_claims: 0,
+                    total_claims: 0,
+                    last_payout_time: env.ledger().timestamp(),
+                });
+            pool.total_reserves += ins_premium;
+            env.storage().persistent().set(&pool_key, &pool);
+        }
+
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
-        let new_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0)
+        let current_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+        let new_bal: i128 = current_bal
             .checked_add(net).expect("balance overflow");
         env.storage().persistent().set(&bal_key, &new_bal);
 
         let tot_key = DataKey::CreatorTotal(creator.clone(), token.clone());
-        let new_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0)
+        let current_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+        let new_tot: i128 = current_tot
             .checked_add(net).expect("total overflow");
         env.storage().persistent().set(&tot_key, &new_tot);
 
@@ -1716,13 +1893,42 @@ impl TipJarContract {
             .get(&DataKey::FeeBasisPoints)
             .unwrap_or(0);
         let fee: i128 = (amount * fee_bp as i128) / 10_000;
-        let creator_amount = amount - fee;
+
+        // --- Insurance Premium Calculation ---
+        let ins_enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        let mut ins_premium: i128 = 0;
+        if ins_enabled {
+            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::InsPoolCfg) {
+                ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
+            }
+        }
+
+        let creator_amount = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
 
         if fee > 0 {
             let fee_key = DataKey::PlatformFeeBalance(token.clone());
             let new_fee_bal: i128 =
                 env.storage().instance().get(&fee_key).unwrap_or(0) + fee;
             env.storage().instance().set(&fee_key, &new_fee_bal);
+        }
+
+        if ins_premium > 0 {
+            let pool_key = DataKey::InsPoolToken(token.clone());
+            let mut pool: InsurancePool = env
+                .storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or_else(|| InsurancePool {
+                    token: token.clone(),
+                    total_reserves: 0,
+                    total_contributions: 0,
+                    total_claims_paid: 0,
+                    active_claims: 0,
+                    total_claims: 0,
+                    last_payout_time: env.ledger().timestamp(),
+                });
+            pool.total_reserves += ins_premium;
+            env.storage().persistent().set(&pool_key, &pool);
         }
 
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
@@ -2191,7 +2397,7 @@ impl TipJarContract {
         env.storage()
             .instance()
             .set(&DataKey::RefundWindow, &refund_window_seconds);
-        env.events().publish((symbol_short!("refund_window"),), refund_window_seconds);
+        env.events().publish((symbol_short!("ref_wind"),), refund_window_seconds);
     }
 
     /// Returns all expired time-locked tips whose refund window has passed.
@@ -2296,7 +2502,7 @@ impl TipJarContract {
             &time_lock.amount,
         );
         env.events().publish(
-            (symbol_short!("tip_expired"), time_lock.creator.clone()),
+            (symbol_short!("tip_exp"), time_lock.creator.clone()),
             (time_lock.sender.clone(), time_lock.amount, time_lock.expires_at, lock_id),
         );
     }
@@ -2314,7 +2520,7 @@ impl TipJarContract {
             .storage()
             .persistent()
             .get(&DataKey::WithdrawalLimits(creator.clone()))
-            .or_else(|| env.storage().instance().get(&DataKey::DefaultWithdrawalLimits))
+            .or_else(|| env.storage().instance().get(&DataKey::DefWithdrawLimits))
             .unwrap_or(WithdrawalLimits {
                 daily_limit: 0,
                 cooldown_seconds: 0,
@@ -2423,7 +2629,7 @@ impl TipJarContract {
         };
         env.storage()
             .instance()
-            .set(&DataKey::DefaultWithdrawalLimits, &defaults);
+            .set(&DataKey::DefWithdrawLimits, &defaults);
 
         env.events()
             .publish((symbol_short!("wl_def"),), (daily_limit, cooldown_seconds));
@@ -2464,7 +2670,7 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::WithdrawalLimits(creator))
-            .or_else(|| env.storage().instance().get(&DataKey::DefaultWithdrawalLimits))
+            .or_else(|| env.storage().instance().get(&DataKey::DefWithdrawLimits))
             .unwrap_or(WithdrawalLimits {
                 daily_limit: 0,
                 cooldown_seconds: 0,
@@ -2597,13 +2803,13 @@ impl TipJarContract {
             .storage()
             .persistent()
             .get(&DataKey::MultiSigRequest(request_id))
-            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MsigReqNotFound));
 
         if request.executed || request.cancelled {
-            panic_with_error!(&env, TipJarError::MultiSigRequestClosed);
+            panic_with_error!(&env, TipJarError::MultiSigReqClosed);
         }
         if env.ledger().timestamp() > request.expires_at {
-            panic_with_error!(&env, TipJarError::MultiSigRequestExpired);
+            panic_with_error!(&env, TipJarError::MultiSigReqExpired);
         }
         if request.approvals.contains(&approver) {
             panic_with_error!(&env, TipJarError::AlreadyApproved);
@@ -2648,10 +2854,10 @@ impl TipJarContract {
             .storage()
             .persistent()
             .get(&DataKey::MultiSigRequest(request_id))
-            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound));
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MsigReqNotFound));
 
         if request.executed || request.cancelled {
-            panic_with_error!(&env, TipJarError::MultiSigRequestClosed);
+            panic_with_error!(&env, TipJarError::MultiSigReqClosed);
         }
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
@@ -2669,7 +2875,7 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::MultiSigRequest(request_id))
-            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MultiSigRequestNotFound))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MsigReqNotFound))
     }
 
     /// Returns the current multi-sig configuration.
@@ -3198,11 +3404,8 @@ impl TipJarContract {
 
         if fee > 0 {
             let fee_key = DataKey::PlatformFeeBalance(token.clone());
-            let new_fee_bal: i128 = env
-                .storage()
-                .instance()
-                .get(&fee_key)
-                .unwrap_or(0)
+            let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            let new_fee_bal: i128 = current_fee
                 .checked_add(fee)
                 .expect("fee overflow");
             env.storage().instance().set(&fee_key, &new_fee_bal);
@@ -3268,7 +3471,7 @@ impl TipJarContract {
 
         // Maximum rate: 1000 tokens/second (adjust as needed)
         if amount_per_second > 1000 {
-            panic_with_error!(&env, TipJarError::StreamRateExceedsMaximum);
+            panic_with_error!(&env, TipJarError::StrmRateMax);
         }
 
         if duration == 0 {
@@ -3327,7 +3530,7 @@ impl TipJarContract {
         token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &total_amount);
 
         env.events().publish(
-            (symbol_short!("stream_created"),),
+            (symbol_short!("strm_cre"),),
             (stream_id, sender, creator, amount_per_second, duration),
         );
 
@@ -3397,7 +3600,7 @@ impl TipJarContract {
         env.storage().persistent().set(&DataKey::Stream(stream_id), &stream);
 
         env.events().publish(
-            (symbol_short!("stream_started"),),
+            (symbol_short!("strm_sta"),),
             stream_id,
         );
     }
@@ -3436,7 +3639,7 @@ impl TipJarContract {
         env.storage().persistent().set(&DataKey::Stream(stream_id), &stream);
 
         env.events().publish(
-            (symbol_short!("stream_stopped"),),
+            (symbol_short!("strm_sto"),),
             (stream_id, streamed_amount),
         );
     }
@@ -3497,7 +3700,7 @@ impl TipJarContract {
         );
 
         env.events().publish(
-            (symbol_short!("stream_withdrawn"),),
+            (symbol_short!("strm_wit"),),
             (stream_id, available_to_withdraw, creator),
         );
     }
@@ -3554,7 +3757,7 @@ impl TipJarContract {
         // (handled by the periodic withdraw_streamed calls)
 
         env.events().publish(
-            (symbol_short!("stream_cancelled"),),
+            (symbol_short!("strm_can"),),
             (stream_id, remaining_amount),
         );
     }
@@ -3611,4 +3814,761 @@ impl TipJarContract {
         let streamed_amount = Self::calculate_streamed_amount(&env, &stream);
         streamed_amount - stream.withdrawn
     }
+
+    /// Initialize the insurance pool configuration for the contract.
+    ///
+    /// Admin only. Sets up insurance pool parameters.
+    /// Emits `("insurance_config_set",)` with data `(min_contrib, max_contrib, premium_rate, payout_ratio)`.
+    pub fn insurance_set_config(
+        env: Env,
+        admin: Address,
+        min_contribution: i128,
+        max_contribution: i128,
+        premium_rate_bps: u32,
+        payout_ratio_bps: u32,
+        claim_cooldown: u64,
+        admin_fee_bps: u32,
+        tip_premium_bps: u32,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if min_contribution < 0 || max_contribution <= min_contribution {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if premium_rate_bps > 500 {
+            panic_with_error!(&env, TipJarError::FeeExceedsMaximum);
+        }
+        if payout_ratio_bps > 10000 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if tip_premium_bps > 1000 {
+            panic_with_error!(&env, TipJarError::FeeExceedsMaximum);
+        }
+
+        let config = InsurancePoolConfig {
+            min_contribution,
+            max_contribution,
+            premium_rate_bps,
+            payout_ratio_bps,
+            claim_cooldown,
+            admin_fee_bps,
+            tip_premium_bps,
+        };
+        env.storage().instance().set(&DataKey::InsPoolCfg, &config);
+
+        env.events().publish(
+            (symbol_short!("ins_cfg"),),
+            (min_contribution, max_contribution, premium_rate_bps, payout_ratio_bps, tip_premium_bps),
+        );
+    }
+
+    /// Enable or disable the insurance feature.
+    ///
+    /// Admin only.
+    pub fn insurance_set_enabled(env: Env, admin: Address, enabled: bool) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::InsEnabled, &enabled);
+        env.events().publish((symbol_short!("ins_en"),), enabled);
+    }
+
+    /// Set the maximum number of active claims a creator can have simultaneously.
+    ///
+    /// Admin only.
+    pub fn insurance_set_max_active_claims(env: Env, admin: Address, max_claims: u32) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if max_claims == 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::InsMaxClms, &max_claims);
+        env.events().publish((symbol_short!("ins_max"),), max_claims);
+    }
+
+    /// Set the insurance admin address.
+    ///
+    /// Admin only.
+    pub fn insurance_set_admin(env: Env, admin: Address, insurance_admin: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::InsAdmin, &insurance_admin);
+        env.events().publish((symbol_short!("ins_adm"),), insurance_admin);
+    }
+
+    /// Contribute to the insurance pool for a specific token.
+    ///
+    /// Creator can contribute funds to gain insurance coverage. The contribution amount
+    /// must be within configured limits. The sender must transfer the tokens to this contract.
+    ///
+    /// Emits `("insurance_contribution",)` with data `(creator, token, amount, coverage_amount)`.
+    pub fn insurance_contribute(
+        env: Env,
+        creator: Address,
+        token: Address,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        // Check if insurance is enabled
+        let enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        if !enabled {
+            panic_with_error!(&env, TipJarError::InsuranceDisabled);
+        }
+
+        let config: InsurancePoolConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsPoolCfg)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsPoolNotCfg));
+
+        if amount < config.min_contribution {
+            panic_with_error!(&env, TipJarError::ContributionTooLow);
+        }
+        if amount > config.max_contribution {
+            panic_with_error!(&env, TipJarError::ContributionTooHigh);
+        }
+
+        // Check whitelist
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        // Transfer tokens from creator to contract
+        token::Client::new(&env, &token).transfer(&creator, &env.current_contract_address(), &amount);
+
+        // Calculate premium for this contribution period
+        let premium_amount = (amount * config.premium_rate_bps as i128) / 10_000;
+
+        // Update pool state
+        let pool_key = DataKey::InsPoolToken(token.clone());
+        let mut pool: InsurancePool = env
+            .storage()
+            .persistent()
+            .get(&pool_key)
+            .unwrap_or_else(|| InsurancePool {
+                token: token.clone(),
+                total_reserves: 0,
+                total_contributions: 0,
+                total_claims_paid: 0,
+                active_claims: 0,
+                total_claims: 0,
+                last_payout_time: env.ledger().timestamp(),
+            });
+
+        pool.total_reserves += amount - premium_amount;
+        pool.total_contributions += amount;
+        env.storage().persistent().set(&pool_key, &pool);
+
+        // Update creator contribution
+        let contrib_key = DataKey::InsContrib(creator.clone(), token.clone());
+        let current_contrib: i128 = env.storage().persistent().get(&contrib_key).unwrap_or(0);
+        env.storage().persistent().set(&contrib_key, &(current_contrib + amount));
+
+        // Add to creator's token list
+        let tokens_key = DataKey::CreatorTokens(creator.clone());
+        let mut tokens: Vec<Address> = env.storage().persistent().get(&tokens_key).unwrap_or_else(|| Vec::new(&env));
+        if !tokens.contains(&token) {
+            tokens.push_back(token.clone());
+            env.storage().persistent().set(&tokens_key, &tokens);
+        }
+
+        // Calculate and add to platform fee balance
+        if premium_amount > 0 {
+            let fee_key = DataKey::PlatformFeeBalance(token.clone());
+            let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            env.storage().instance().set(&fee_key, &(current_fee + premium_amount));
+        }
+
+        env.events().publish(
+            (symbol_short!("ins_con"),),
+            (creator.clone(), token, amount, pool.total_reserves),
+        );
+    }
+
+    /// Submit an insurance claim for a failed transaction.
+    ///
+    /// A creator can submit a claim when they experience a failed transaction
+    /// (e.g., failed tip, failed withdrawal). The claim must include proof
+    /// (transaction hash) and will be subject to review.
+    ///
+    /// Emits `("claim_submitted",)` with data `(claim_id, creator, token, amount)`.
+    pub fn insurance_submit_claim(
+        env: Env,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        tx_hash: BytesN<32>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidClaimAmount);
+        }
+
+        // Check if insurance is enabled
+        let enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        if !enabled {
+            panic_with_error!(&env, TipJarError::InsuranceDisabled);
+        }
+
+        // Check if pool is configured
+        let config: InsurancePoolConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsPoolCfg)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsPoolNotCfg));
+
+        // Check creator has coverage
+        let max_payout = Self::insurance_get_coverage(env.clone(), creator.clone(), token.clone());
+        if max_payout <= 0 {
+            panic_with_error!(&env, TipJarError::NoCoverage);
+        }
+
+        // Check active claim limit
+        let max_active: u32 = env.storage().instance().get(&DataKey::InsMaxClms).unwrap_or(3);
+        let active_key = DataKey::InsActiveClms(creator.clone(), token.clone());
+        let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(0);
+        if active_claims >= max_active {
+            panic_with_error!(&env, TipJarError::TooManyActiveClaims);
+        }
+
+        // Check last claim cooldown
+        let last_claim_key = DataKey::InsLastClm(creator.clone(), token.clone());
+        let last_claim: u64 = env.storage().persistent().get(&last_claim_key).unwrap_or(0);
+        let now = env.ledger().timestamp();
+        if last_claim > 0 && now < last_claim + config.claim_cooldown {
+            panic_with_error!(&env, TipJarError::ClaimCooldownActive);
+        }
+
+        // Check pool has sufficient reserves
+        let pool_key = DataKey::InsPoolToken(token.clone());
+        let pool: InsurancePool = env
+            .storage()
+            .persistent()
+            .get(&pool_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsufficientReserves));
+
+        if amount > max_payout {
+            panic_with_error!(&env, TipJarError::PayoutExceedsReserves);
+        }
+
+        if amount > pool.total_reserves {
+            panic_with_error!(&env, TipJarError::InsufficientReserves);
+        }
+
+        // Create claim
+        let claim_id: u64 = env.storage().instance().get(&DataKey::InsClaimCtr).unwrap_or(0);
+        env.storage().instance().set(&DataKey::InsClaimCtr, &(claim_id + 1));
+
+        let claim = InsuranceClaim {
+            claim_id,
+            creator: creator.clone(),
+            token: token.clone(),
+            amount,
+            tx_hash,
+            status: ClaimStatus::Pending,
+            created_at: now,
+            updated_at: now,
+            last_claim_at: last_claim,
+        };
+        env.storage().persistent().set(&DataKey::InsClaim(claim_id), &claim);
+
+        // Add to creator's claims list
+        let creator_claims_key = DataKey::InsClms(creator.clone(), token.clone());
+        let mut creator_claims: Vec<u64> = env.storage().persistent().get(&creator_claims_key).unwrap_or_else(|| Vec::new(&env));
+        creator_claims.push_back(claim_id);
+        env.storage().persistent().set(&creator_claims_key, &creator_claims);
+
+        // Update active claim count
+        env.storage().persistent().set(&active_key, &(active_claims + 1));
+
+        // Update total claims count
+        let total_claims_key = DataKey::InsTotalClms(creator.clone(), token.clone());
+        let total_claims: u32 = env.storage().persistent().get(&total_claims_key).unwrap_or(0);
+        env.storage().persistent().set(&total_claims_key, &(total_claims + 1));
+
+        // Update pool
+        let mut updated_pool = pool.clone();
+        updated_pool.active_claims += 1;
+        updated_pool.total_claims += 1;
+        env.storage().persistent().set(&pool_key, &updated_pool);
+
+        env.events().publish(
+            (symbol_short!("clm_sub"),),
+            (claim_id, creator, token, amount),
+        );
+
+        claim_id
+    }
+
+    /// Approve an insurance claim (admin or insurance admin).
+    ///
+    /// Only the contract admin or insurance admin can approve claims.
+    /// Once approved, the claim can be paid out.
+    ///
+    /// Emits `("claim_approved",)` with data `(claim_id, approver)`.
+    pub fn insurance_approve_claim(
+        env: Env,
+        approver: Address,
+        claim_id: u64,
+    ) {
+        approver.require_auth();
+
+        // Check if caller is admin or insurance admin
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let insurance_admin: Address = env.storage().instance().get(&DataKey::InsAdmin).unwrap_or(stored_admin.clone());
+        if approver != stored_admin && approver != insurance_admin {
+            panic_with_error!(&env, TipJarError::AdmAppReq);
+        }
+
+        let claim: InsuranceClaim = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsClaim(claim_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::ClaimNotFound));
+
+        if claim.status != ClaimStatus::Pending {
+            panic_with_error!(&env, TipJarError::ClaimNotApproved);
+        }
+
+        let mut updated_claim = claim.clone();
+        updated_claim.status = ClaimStatus::Approved;
+        updated_claim.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::InsClaim(claim_id), &updated_claim);
+
+        // Update pool
+        let pool_key = DataKey::InsPoolToken(claim.token.clone());
+        let pool: InsurancePool = env.storage().persistent().get(&pool_key).unwrap();
+        let mut updated_pool = pool.clone();
+        updated_pool.active_claims -= 1;
+        env.storage().persistent().set(&pool_key, &updated_pool);
+
+        // Update creator active claims
+        let active_key = DataKey::InsActiveClms(claim.creator.clone(), claim.token.clone());
+        let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
+        env.storage().persistent().set(&active_key, &(active_claims - 1));
+
+        env.events().publish(
+            (symbol_short!("clm_app"),),
+            (claim_id, approver),
+        );
+    }
+
+    /// Reject an insurance claim (admin or insurance admin).
+    ///
+    /// Only the contract admin or insurance admin can reject claims.
+    ///
+    /// Emits `("claim_rejected",)` with data `(claim_id, rejector)`.
+    pub fn insurance_reject_claim(
+        env: Env,
+        rejector: Address,
+        claim_id: u64,
+    ) {
+        rejector.require_auth();
+
+        // Check if caller is admin or insurance admin
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let insurance_admin: Address = env.storage().instance().get(&DataKey::InsAdmin).unwrap_or(stored_admin.clone());
+        if rejector != stored_admin && rejector != insurance_admin {
+            panic_with_error!(&env, TipJarError::AdmAppReq);
+        }
+
+        let claim: InsuranceClaim = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsClaim(claim_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::ClaimNotFound));
+
+        if claim.status != ClaimStatus::Pending && claim.status != ClaimStatus::Approved {
+            panic_with_error!(&env, TipJarError::ClaimNotApproved);
+        }
+
+        let mut updated_claim = claim.clone();
+        updated_claim.status = ClaimStatus::Rejected;
+        updated_claim.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::InsClaim(claim_id), &updated_claim);
+
+        if claim.status == ClaimStatus::Approved {
+            // Update pool
+            let pool_key = DataKey::InsPoolToken(claim.token.clone());
+            let pool: InsurancePool = env.storage().persistent().get(&pool_key).unwrap();
+            let mut updated_pool = pool.clone();
+            updated_pool.active_claims -= 1;
+            env.storage().persistent().set(&pool_key, &updated_pool);
+
+            // Update creator active claims
+            let active_key = DataKey::InsActiveClms(claim.creator.clone(), claim.token.clone());
+            let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
+            env.storage().persistent().set(&active_key, &(active_claims - 1));
+        }
+
+        env.events().publish(
+            (symbol_short!("clm_rej"),),
+            (claim_id, rejector),
+        );
+    }
+
+    /// Pay out an approved insurance claim.
+    ///
+    /// Transfers funds from the insurance pool to the creator.
+    /// Can only be called for approved claims that haven't been paid yet.
+    ///
+    /// Emits `("claim_paid",)` with data `(claim_id, amount, creator)`.
+    pub fn insurance_pay_claim(
+        env: Env,
+        caller: Address,
+        claim_id: u64,
+    ) {
+        caller.require_auth();
+
+        // Check if caller is admin or insurance admin
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let insurance_admin: Address = env.storage().instance().get(&DataKey::InsAdmin).unwrap_or(stored_admin.clone());
+        if caller != stored_admin && caller != insurance_admin {
+            panic_with_error!(&env, TipJarError::AdmAppReq);
+        }
+
+        let claim: InsuranceClaim = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsClaim(claim_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::ClaimNotFound));
+
+        if claim.status != ClaimStatus::Approved {
+            panic_with_error!(&env, TipJarError::ClaimNotApproved);
+        }
+
+        // Check pool has sufficient reserves
+        let pool_key = DataKey::InsPoolToken(claim.token.clone());
+        let pool: InsurancePool = env
+            .storage()
+            .persistent()
+            .get(&pool_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsufficientReserves));
+
+        if claim.amount > pool.total_reserves {
+            panic_with_error!(&env, TipJarError::InsufficientReserves);
+        }
+
+        // Update creator's contribution (deduct claim amount)
+        let contrib_key = DataKey::InsContrib(claim.creator.clone(), claim.token.clone());
+        let current_contrib: i128 = env.storage().persistent().get(&contrib_key).unwrap_or(0);
+        let new_contrib = current_contrib - claim.amount;
+        env.storage().persistent().set(&contrib_key, &(new_contrib.max(0)));
+
+        // Update pool reserves
+        let mut updated_pool = pool.clone();
+        updated_pool.total_reserves -= claim.amount;
+        updated_pool.total_claims_paid += claim.amount;
+        updated_pool.active_claims -= 1;
+        updated_pool.last_payout_time = env.ledger().timestamp();
+        env.storage().persistent().set(&pool_key, &updated_pool);
+
+        // Update claim status
+        let mut updated_claim = claim.clone();
+        updated_claim.status = ClaimStatus::Paid;
+        updated_claim.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::InsClaim(claim_id), &updated_claim);
+
+        // Update creator's last claim time and active claims
+        let last_claim_key = DataKey::InsLastClm(claim.creator.clone(), claim.token.clone());
+        env.storage().persistent().set(&last_claim_key, &(env.ledger().timestamp()));
+
+        let active_key = DataKey::InsActiveClms(claim.creator.clone(), claim.token.clone());
+        let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
+        env.storage().persistent().set(&active_key, &(active_claims - 1));
+
+        // Transfer funds to creator
+        token::Client::new(&env, &claim.token).transfer(
+            &env.current_contract_address(),
+            &claim.creator,
+            &claim.amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("clm_paid"),),
+            (claim_id, claim.amount, claim.creator),
+        );
+    }
+
+    /// Get the insurance pool configuration.
+    pub fn insurance_get_config(env: Env) -> InsurancePoolConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::InsPoolCfg)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsPoolNotCfg))
+    }
+
+    /// Check if the insurance feature is enabled.
+    pub fn insurance_is_enabled(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true)
+    }
+
+    /// Get the insurance pool state for a specific token.
+    pub fn insurance_get_pool(env: Env, token: Address) -> Option<InsurancePool> {
+        env.storage().persistent().get(&DataKey::InsPoolToken(token))
+    }
+
+    /// Get a specific insurance claim by ID.
+    pub fn insurance_get_claim(env: Env, claim_id: u64) -> InsuranceClaim {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsClaim(claim_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::ClaimNotFound))
+    }
+
+    /// Get creator's contribution amount for a specific token.
+    pub fn insurance_get_contribution(env: Env, creator: Address, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsContrib(creator, token))
+            .unwrap_or(0)
+    }
+
+    /// Get creator's coverage limit based on their contribution and tips received.
+    pub fn insurance_get_coverage(env: Env, creator: Address, token: Address) -> i128 {
+        let config: InsurancePoolConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsPoolCfg)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsPoolNotCfg));
+
+        // Manual contribution coverage
+        let contrib: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsContrib(creator.clone(), token.clone()))
+            .unwrap_or(0);
+
+        // Automatic premium coverage estimate from tips received
+        let total_received: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorTotal(creator, token))
+            .unwrap_or(0);
+        
+        // Since CreatorTotal is net of fees and premiums, we approximate the original gross 
+        // to find the premium paid. Gross = Net / (1 - fee_bps - premium_bps)
+        // For simplicity, we use Net * premium_bps as a conservative estimate of coverage earned.
+        let premium_earned = (total_received * config.tip_premium_bps as i128) / 10_000;
+
+        ((contrib + premium_earned) * config.payout_ratio_bps as i128) / 10_000
+    }
+
+    /// Get creator's active claim count for a specific token.
+    pub fn insurance_get_active_claims(env: Env, creator: Address, token: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsActiveClms(creator, token))
+            .unwrap_or(0)
+    }
+
+    /// Get creator's total claim count for a specific token.
+    pub fn insurance_get_total_claims(env: Env, creator: Address, token: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsTotalClms(creator, token))
+            .unwrap_or(0)
+    }
+
+    /// Check if insurance is available for a creator/token combination.
+    pub fn insurance_has_coverage(env: Env, creator: Address, token: Address) -> bool {
+        let contrib: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsContrib(creator, token))
+            .unwrap_or(0);
+        contrib > 0
+    }
+
+    /// Withdraw excess funds from the insurance pool (admin only).
+    ///
+    /// Allows admin to withdraw funds beyond a minimum reserve threshold.
+    /// Emits `("pool_withdraw",)` with data `(token, amount)`.
+    pub fn insurance_withdraw_excess(
+        env: Env,
+        admin: Address,
+        token: Address,
+        amount: i128,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let pool_key = DataKey::InsPoolToken(token.clone());
+        let pool: InsurancePool = env
+            .storage()
+            .persistent()
+            .get(&pool_key)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::InsufficientReserves));
+
+        // Keep minimum reserve (10% of total contributions)
+        let min_reserve = pool.total_contributions / 10;
+        if pool.total_reserves - amount < min_reserve {
+            panic_with_error!(&env, TipJarError::InsufficientReserves);
+        }
+
+        let mut updated_pool = pool.clone();
+        updated_pool.total_reserves -= amount;
+        env.storage().persistent().set(&pool_key, &updated_pool);
+
+        // Transfer to admin
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &admin,
+            &amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("pol_wit"),),
+            (token, amount),
+        );
+    }
+
+    /// Get the insurance admin address.
+    pub fn insurance_get_admin(env: Env) -> Address {
+        env.storage().instance()
+            .get(&DataKey::InsAdmin)
+            .unwrap_or_else(|| env.storage().instance().get(&DataKey::Admin).unwrap())
+    }
+
+    /// Get the maximum active claims per creator.
+    pub fn insurance_get_max_active_claims(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::InsMaxClms).unwrap_or(3)
+    }
+
+    /// Process multiple insurance claims in batch (admin only).
+    ///
+    /// Allows efficient approval/payment of multiple claims at once.
+    /// Emits `("claims_processed",)` with data `(approved_count, paid_count)`.
+    pub fn insurance_process_claims_batch(
+        env: Env,
+        admin: Address,
+        claim_ids: Vec<u64>,
+        action: String,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let mut approved_count: u32 = 0;
+        let mut paid_count: u32 = 0;
+
+        for i in 0..claim_ids.len() {
+            let claim_id = claim_ids.get(i).unwrap();
+            let claim: InsuranceClaim = env
+                .storage()
+                .persistent()
+                .get(&DataKey::InsClaim(claim_id))
+                .unwrap_or_else(|| panic_with_error!(&env, TipJarError::ClaimNotFound));
+
+            if action == String::from_str(&env, "approve") {
+                if claim.status == ClaimStatus::Pending {
+                    let mut updated_claim = claim.clone();
+                    updated_claim.status = ClaimStatus::Approved;
+                    updated_claim.updated_at = env.ledger().timestamp();
+                    env.storage().persistent().set(&DataKey::InsClaim(claim_id), &updated_claim);
+
+                    // Update pool active claims
+                    let pool_key = DataKey::InsPoolToken(claim.token.clone());
+                    let pool: InsurancePool = env.storage().persistent().get(&pool_key).unwrap();
+                    let mut updated_pool = pool.clone();
+                    updated_pool.active_claims -= 1;
+                    env.storage().persistent().set(&pool_key, &updated_pool);
+
+                    // Update creator active claims
+                    let active_key = DataKey::InsActiveClms(claim.creator.clone(), claim.token.clone());
+                    let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
+                    env.storage().persistent().set(&active_key, &(active_claims - 1));
+
+                    approved_count += 1;
+                }
+            } else if action == String::from_str(&env, "pay") {
+                if claim.status == ClaimStatus::Approved {
+                    let pool_key = DataKey::InsPoolToken(claim.token.clone());
+                    let pool: InsurancePool = env.storage().persistent().get(&pool_key).unwrap();
+
+                    if claim.amount <= pool.total_reserves {
+                        let mut updated_pool = pool.clone();
+                        updated_pool.total_reserves -= claim.amount;
+                        updated_pool.total_claims_paid += claim.amount;
+                        updated_pool.active_claims -= 1;
+                        updated_pool.last_payout_time = env.ledger().timestamp();
+                        env.storage().persistent().set(&pool_key, &updated_pool);
+
+                        let mut updated_claim = claim.clone();
+                        updated_claim.status = ClaimStatus::Paid;
+                        updated_claim.updated_at = env.ledger().timestamp();
+                        env.storage().persistent().set(&DataKey::InsClaim(claim_id), &updated_claim);
+
+                        // Update creator last claim time
+                        let last_claim_key = DataKey::InsLastClm(claim.creator.clone(), claim.token.clone());
+                        env.storage().persistent().set(&last_claim_key, &(env.ledger().timestamp()));
+
+                        // Update creator active claims
+                        let active_key = DataKey::InsActiveClms(claim.creator.clone(), claim.token.clone());
+                        let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
+                        env.storage().persistent().set(&active_key, &(active_claims - 1));
+
+                        // Transfer funds
+                        token::Client::new(&env, &claim.token).transfer(
+                            &env.current_contract_address(),
+                            &claim.creator,
+                            &claim.amount,
+                        );
+
+                        paid_count += 1;
+                    }
+                }
+            }
+        }
+
+        env.events().publish(
+            (symbol_short!("clm_pro"),),
+            (approved_count, paid_count),
+        );
+    }
+
+    /// Get all insurance claims for a specific creator and token.
+    ///
+    /// Returns a vector of claim IDs for the creator's claims.
+    pub fn insurance_get_claims_by_creator(
+        env: Env,
+        creator: Address,
+        token: Address,
+    ) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::InsClms(creator, token))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
 }
+

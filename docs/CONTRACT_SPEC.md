@@ -137,6 +137,69 @@ Subscriber-only lifecycle management.
 
 #### `get_subscription(subscriber, creator) -> Option<Subscription>`
 
+### Streaming
+
+
+#### `create_stream(sender, creator, token, rate_per_second, duration_seconds) -> u64`
+Creates a continuous tip stream where tokens are released over time. Tokens are escrowed upfront.
+
+- Requires auth from `sender`.
+- Emits: `("stream_created",)` -> `(stream_id, sender, creator, amount, rate)`.
+
+#### `start_stream(sender, stream_id)` / `stop_stream(sender, stream_id)`
+Resumes or pauses an existing stream. Only the sender can control the stream state.
+
+#### `withdraw_streamed(creator, stream_id)`
+Withdraws all currently unlocked tokens from the stream.
+
+- Requires auth from `creator`.
+- Emits: `("stream_withdrawn",)` -> `(stream_id, amount)`.
+
+#### `cancel_stream(sender, stream_id)`
+Permanently stops a stream and refunds remaining escrowed tokens to the sender.
+
+- Requires auth from `sender`.
+- Emits: `("stream_cancelled",)` -> `(stream_id, refunded_amount)`.
+
+#### `get_streamed_amount(stream_id) -> i128`
+Returns total amount released by the stream so far.
+
+#### `get_available_to_withdraw(stream_id) -> i128`
+Returns amount available for the creator to withdraw.
+
+### Insurance
+
+#### `insurance_set_config(admin, min_contrib, max_contrib, premium_rate, payout_ratio, cooldown, admin_fee, tip_premium)`
+Sets global insurance parameters. Admin only.
+
+#### `insurance_contribute(creator, token, amount)`
+Allows a creator to contribute tokens to the insurance pool to gain coverage.
+
+- Requires auth from `creator`.
+- Emits: `("insurance_contribution",)` -> `(creator, token, amount, pool_reserves)`.
+
+#### `insurance_submit_claim(creator, token, amount, tx_hash) -> u64`
+Submits a claim for a failed transaction. Requires existing coverage.
+
+- Requires auth from `creator`.
+- Panics: `NoCoverage` if creator has no active insurance.
+- Panics: `ClaimCooldownActive` if submitted too soon after last claim.
+- Emits: `("claim_submitted",)` -> `(claim_id, creator, token, amount)`.
+
+#### `insurance_approve_claim(admin, claim_id)` / `insurance_reject_claim(admin, claim_id)`
+Admin review of submitted claims.
+
+#### `insurance_pay_claim(admin, claim_id)`
+Payout of an approved claim from the insurance pool to the creator.
+
+- Emits: `("claim_paid",)` -> `(claim_id, amount, creator)`.
+
+#### `insurance_process_claims_batch(admin, claim_ids, action)`
+Batch process multiple claims (approve or pay) for efficiency.
+
+#### `insurance_get_coverage(creator, token) -> i128`
+Returns current maximum payout available for a creator based on contributions and tips received.
+
 ### Administration
 
 #### `pause(admin, reason: String)` / `unpause(admin)`

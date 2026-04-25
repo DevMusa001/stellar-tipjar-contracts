@@ -38,7 +38,7 @@ pub fn execute_proposal(env: &Env, executor: &Address, proposal_id: u64) {
 /// Execute a single action
 fn execute_action(env: &Env, action: &ProposalAction) {
     match action {
-        ProposalAction::UpdateFee { new_fee_bps } => {
+        ProposalAction::UpdateFee(new_fee_bps) => {
             // In production, this would update the AMM fee
             // For now, we'll just log the action
             env.events().publish(
@@ -46,58 +46,58 @@ fn execute_action(env: &Env, action: &ProposalAction) {
                 *new_fee_bps,
             );
         }
-        ProposalAction::AddToken { token } => {
+        ProposalAction::AddToken(token) => {
             // In production, this would add token to whitelist
             env.events().publish(
                 (soroban_sdk::symbol_short!("token_add"),),
                 token.clone(),
             );
         }
-        ProposalAction::RemoveToken { token } => {
+        ProposalAction::RemoveToken(token) => {
             // In production, this would remove token from whitelist
             env.events().publish(
                 (soroban_sdk::symbol_short!("token_rm"),),
                 token.clone(),
             );
         }
-        ProposalAction::UpdatePauseStatus { paused } => {
+        ProposalAction::UpdatePauseStatus(paused) => {
             // In production, this would update pause status
             env.events().publish(
                 (soroban_sdk::symbol_short!("pause_upd"),),
                 *paused,
             );
         }
-        ProposalAction::UpdateTimelock { new_timelock } => {
+        ProposalAction::UpdateTimelock(new_timelock) => {
             // Update timelock in governance config
             let mut config = super::get_governance_config(env);
             config.timelock_period = *new_timelock;
             super::update_governance_config(env, &config);
         }
-        ProposalAction::UpdateQuorum { new_quorum } => {
+        ProposalAction::UpdateQuorum(new_quorum) => {
             // Update quorum in governance config
             let mut config = super::get_governance_config(env);
             config.quorum = *new_quorum;
             super::update_governance_config(env, &config);
         }
-        ProposalAction::UpdateProposalThreshold { new_threshold } => {
+        ProposalAction::UpdPropThresh(new_threshold) => {
             // Update proposal threshold in governance config
             let mut config = super::get_governance_config(env);
             config.proposal_threshold = *new_threshold;
             super::update_governance_config(env, &config);
         }
-        ProposalAction::UpdateVotingPeriod { new_period } => {
+        ProposalAction::UpdateVotingPeriod(new_period) => {
             // Update voting period in governance config
             let mut config = super::get_governance_config(env);
             config.voting_period = *new_period;
             super::update_governance_config(env, &config);
         }
-        ProposalAction::UpdateVotingDelay { new_delay } => {
+        ProposalAction::UpdateVotingDelay(new_delay) => {
             // Update voting delay in governance config
             let mut config = super::get_governance_config(env);
             config.voting_delay = *new_delay;
             super::update_governance_config(env, &config);
         }
-        ProposalAction::Custom { data } => {
+        ProposalAction::Custom(data) => {
             // Custom action - just log it
             env.events().publish(
                 (soroban_sdk::symbol_short!("custom"),),

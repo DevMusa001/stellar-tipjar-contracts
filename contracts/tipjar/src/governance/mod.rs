@@ -28,16 +28,16 @@ pub struct Proposal {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProposalAction {
-    UpdateFee { new_fee_bps: u32 },
-    AddToken { token: Address },
-    RemoveToken { token: Address },
-    UpdatePauseStatus { paused: bool },
-    UpdateTimelock { new_timelock: u64 },
-    UpdateQuorum { new_quorum: i128 },
-    UpdateProposalThreshold { new_threshold: i128 },
-    UpdateVotingPeriod { new_period: u64 },
-    UpdateVotingDelay { new_delay: u64 },
-    Custom { data: String },
+    UpdateFee(u32),
+    AddToken(Address),
+    RemoveToken(Address),
+    UpdatePauseStatus(bool),
+    UpdateTimelock(u64),
+    UpdateQuorum(i128),
+    UpdPropThresh(i128),
+    UpdateVotingPeriod(u64),
+    UpdateVotingDelay(u64),
+    Custom(String),
 }
 
 /// Vote choice

@@ -102,15 +102,50 @@ Emitted when a creator grants withdrawal authorization to a delegate.
 | `max_amount` | `i128` | Lifetime withdrawal cap for the delegation |
 | `expires_at` | `u64` | Expiry timestamp for the delegation |
 
-**Example (conceptual)**
-```
-topics: ["delegate", "GCREATOR..."]
-data:   ["GDELEGATE...", 300, 1_800_000_100]
-```
+---
+
+## `delegate_withdraw`
+
+Emitted when a delegate successfully withdraws on behalf of a creator.
+
+**Topics**
+
+| Position | Value | Type |
+|---|---|---|
+| 0 | `"del_wdr"` | `Symbol` |
+| 1 | `creator` | `Address` |
+
+**Data**
+
+| Field | Type | Description |
+|---|---|---|
+| `delegate` | `Address` | The delegate that withdrew funds |
+| `amount` | `i128` | Amount withdrawn |
+| `token` | `Address` | The token asset withdrawn |
 
 ---
 
-## `delegate_withdraw`\n\nEmitted when a delegate successfully withdraws on behalf of a creator.\n\n**Topics**\n\n| Position | Value | Type |\n|---|---|---|\n| 0 | `\"del_wdr\"` | `Symbol` |\n| 1 | `creator` | `Address` |\n\n**Data**\n\n| Field | Type | Description |\n|---|---|---|\n| `delegate` | `Address` | The delegate that withdrew funds |\n| `amount` | `i128` | Amount withdrawn |\n| `token` | `Address` | The token asset withdrawn |\n\n**Example (conceptual)**\n```\ntopics: [\"del_wdr\", \"GCREATOR...\"]\ndata:   [\"GDELEGATE...\", 200, \"GTOKEN...\"]\n```\n\n---\n\n## `delegate_revoked`\n\nEmitted when a creator revokes a delegation.\n\n**Topics**\n\n| Position | Value | Type |\n|---|---|---|\n| 0 | `\"del_rev\"` | `Symbol` |\n| 1 | `creator` | `Address` |\n\n**Data**\n\n| Field | Type | Description |\n|---|---|---|\n| `delegate` | `Address` | The delegate that was revoked |\n\n**Example (conceptual)**\n```\ntopics: [\"del_rev\", \"GCREATOR...\"]\ndata:   [\"GDELEGATE...\"]\n```\n\n---\n\n## `tip_expired`\n
+## `delegate_revoked`
+
+Emitted when a creator revokes a delegation.
+
+**Topics**
+
+| Position | Value | Type |
+|---|---|---|
+| 0 | `"del_rev"` | `Symbol` |
+| 1 | `creator` | `Address` |
+
+**Data**
+
+| Field | Type | Description |
+|---|---|---|
+| `delegate` | `Address` | The delegate that was revoked |
+
+---
+
+## `tip_expired`
+
 Emitted when an unclaimed time-locked tip is refunded after its expiration window.
 
 **Topics**
@@ -129,11 +164,69 @@ Emitted when an unclaimed time-locked tip is refunded after its expiration windo
 | `expires_at` | `u64` | Expiry timestamp that triggered the refund |
 | `lock_id` | `u64` | Identifier for the refunded time-lock |
 
-**Example (conceptual)**
-```
-topics: ["tip_expired", "GCREATOR..."]
-data:   ["GSENDER...", 500, 1_800_000_100, 0]
-```
+---
+
+## `stream_created`
+
+Emitted when a new continuous tip stream is initialized.
+
+**Topics**
+
+| Position | Value | Type |
+|---|---|---|
+| 0 | `"strm_new"` | `Symbol` |
+| 1 | `stream_id` | `u64` |
+
+**Data**
+
+| Field | Type | Description |
+|---|---|---|
+| `sender` | `Address` | The address that created the stream |
+| `creator` | `Address` | The stream recipient |
+| `token` | `Address` | The token asset being streamed |
+| `total` | `i128` | Total amount escrowed for the stream |
+| `rate` | `i128` | Stream rate in tokens per second |
+
+---
+
+## `claim_submitted`
+
+Emitted when an insurance claim is submitted.
+
+**Topics**
+
+| Position | Value | Type |
+|---|---|---|
+| 0 | `"clm_sub"` | `Symbol` |
+
+**Data**
+
+| Field | Type | Description |
+|---|---|---|
+| `claim_id` | `u64` | Global identifier for the claim |
+| `creator` | `Address` | The creator submitting the claim |
+| `token` | `Address` | The token the claim is for |
+| `amount` | `i128` | Requested payout amount |
+
+---
+
+## `claim_paid`
+
+Emitted when an insurance claim is successfully paid out.
+
+**Topics**
+
+| Position | Value | Type |
+|---|---|---|
+| 0 | `"clm_paid"` | `Symbol` |
+
+**Data**
+
+| Field | Type | Description |
+|---|---|---|
+| `claim_id` | `u64` | Global identifier for the paid claim |
+| `amount` | `i128` | Total amount paid out to the creator |
+| `creator` | `Address` | Recipient of the payout |
 
 ---
 
@@ -146,13 +239,4 @@ stellar events \
   --network testnet \
   --contract-id <CONTRACT_ID> \
   --start-ledger <LEDGER>
-```
-
-Filter by topic to watch only tip events:
-
-```bash
-stellar events \
-  --network testnet \
-  --contract-id <CONTRACT_ID> \
-  --topic1 tip
 ```

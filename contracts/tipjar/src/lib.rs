@@ -420,6 +420,21 @@ pub struct TimeLock {
     pub cancelled: bool,
 }
 
+/// An auction for exclusive creator content or experiences.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Auction {
+    pub auction_id: u64,
+    pub creator: Address,
+    pub token: Address,
+    pub reserve_price: i128,
+    pub highest_bid: i128,
+    pub highest_bidder: Option<Address>,
+    pub ends_at: u64,
+    pub created_at: u64,
+    pub settled: bool,
+}
+
 /// A pending multi-signature withdrawal request.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -576,6 +591,12 @@ pub enum DataKey {
     SenderStreams(Address),
     /// Global stream counter.
     StreamCounter,
+    /// Global auction counter.
+    AuctionCounter,
+    /// Auction record keyed by auction ID.
+    Auction(u64),
+    /// Creator auction IDs list.
+    CreatorAuctions(Address),
     /// Time-lock record keyed by lock ID.
     TimeLock(u64),
     /// Multi-sig withdrawal request keyed by request ID.
@@ -762,6 +783,24 @@ pub enum TipJarError {
     NoStreamedAmount = 76,
     /// Stream rate exceeds maximum allowed (1000 tokens/second).
     StrmRateMax = 77,
+    /// Auction not found.
+    AuctionNotFound = 78,
+    /// Auction has already been settled.
+    AuctionAlreadySettled = 79,
+    /// Auction is not yet ended.
+    AuctionNotEnded = 80,
+    /// Auction bid did not meet the opening reserve price.
+    AuctionReserveNotMet = 81,
+    /// Auction bid is too low.
+    AuctionBidTooLow = 82,
+    /// Auction creator is not authorized to settle.
+    AuctionUnauthorized = 83,
+    /// Auction duration must be greater than zero.
+    InvalidAuctionDuration = 84,
+    /// Auction reserve price must be non-negative.
+    InvalidReservePrice = 85,
+    /// Auction has already ended and can no longer accept bids.
+    AuctionEnded = 86,
 }
 
 #[contract]
@@ -780,6 +819,24 @@ impl TipJarContract {
         {
             panic_with_error!(env, TipJarError::ContractPaused);
         }
+    }
+
+    fn add_creator_auction(env: &Env, creator: &Address, auction_id: u64) {
+        let mut auctions: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CreatorAuctions(creator.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+        if !auctions.contains(&auction_id) {
+            auctions.push_back(auction_id);
+            env.storage()
+                .persistent()
+                .set(&DataKey::CreatorAuctions(creator.clone()), &auctions);
+        }
+    }
+
+    fn get_auction_record(env: &Env, auction_id: u64) -> Option<Auction> {
+        env.storage().persistent().get(&DataKey::Auction(auction_id))
     }
 
     // ── leaderboard helpers ──────────────────────────────────────────────────
@@ -1031,6 +1088,254 @@ impl TipJarContract {
         env.storage().persistent().set(&bal_key, &0i128);
         token::Client::new(&env, &token).transfer(&env.current_contract_address(), &creator, &amount);
         events::emit_withdraw_event(&env, &creator, amount, &token);
+    }
+
+    /// Creates an auction for a creator with an optional reserve price.
+    ///
+    /// `duration_seconds` must be greater than zero.
+    /// Emits `("auction_created",)` with data `(auction_id, creator, token, reserve_price, ends_at)`.
+    pub fn create_auction(
+        env: Env,
+        creator: Address,
+        token: Address,
+        reserve_price: i128,
+        duration_seconds: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+        if reserve_price < 0 {
+            panic_with_error!(&env, TipJarError::InvalidReservePrice);
+        }
+        if duration_seconds == 0 {
+            panic_with_error!(&env, TipJarError::InvalidAuctionDuration);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let auction_id: u64 = env.storage().instance().get(&DataKey::AuctionCounter).unwrap_or(0);
+        env.storage().instance().set(&DataKey::AuctionCounter, &(auction_id + 1));
+
+        let now = env.ledger().timestamp();
+        let ends_at = now.saturating_add(duration_seconds);
+        let auction = Auction {
+            auction_id,
+            creator: creator.clone(),
+            token: token.clone(),
+            reserve_price,
+            highest_bid: 0,
+            highest_bidder: None,
+            ends_at,
+            created_at: now,
+            settled: false,
+        };
+
+        env.storage().persistent().set(&DataKey::Auction(auction_id), &auction);
+        Self::add_creator_auction(&env, &creator, auction_id);
+
+        env.events().publish(
+            (symbol_short!("auc_crt"),),
+            (auction_id, creator.clone(), token.clone(), reserve_price, ends_at),
+        );
+        auction_id
+    }
+
+    /// Places a bid on an active auction.
+    ///
+    /// `amount` must exceed the current highest bid and, for the first bid,
+    /// must meet the reserve price.
+    /// Emits `("auction_bid",)` with data `(auction_id, bidder, amount)`.
+    pub fn place_bid(env: Env, bidder: Address, auction_id: u64, amount: i128) {
+        Self::require_not_paused(&env);
+        bidder.require_auth();
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let mut auction: Auction = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Auction(auction_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::AuctionNotFound));
+        if auction.settled {
+            panic_with_error!(&env, TipJarError::AuctionAlreadySettled);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= auction.ends_at {
+            panic_with_error!(&env, TipJarError::AuctionEnded);
+        }
+
+        if amount <= auction.highest_bid {
+            panic_with_error!(&env, TipJarError::AuctionBidTooLow);
+        }
+        if auction.highest_bid == 0 && amount < auction.reserve_price {
+            panic_with_error!(&env, TipJarError::AuctionReserveNotMet);
+        }
+
+        let previous_highest_bid = auction.highest_bid;
+        let previous_highest_bidder = auction.highest_bidder.clone();
+
+        auction.highest_bid = amount;
+        auction.highest_bidder = Some(bidder.clone());
+        env.storage().persistent().set(&DataKey::Auction(auction_id), &auction);
+
+        token::Client::new(&env, &auction.token).transfer(
+            &bidder,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        if let Some(previous_bidder) = previous_highest_bidder {
+            token::Client::new(&env, &auction.token).transfer(
+                &env.current_contract_address(),
+                &previous_bidder,
+                &previous_highest_bid,
+            );
+        }
+
+        env.events().publish(
+            (symbol_short!("auc_bid"),),
+            (auction_id, bidder.clone(), amount),
+        );
+    }
+
+    /// Settles an ended auction and credits creator earnings if successful.
+    ///
+    /// Emits `("auction_settled",)` on success or `("auction_failed",)` when the
+    /// reserve is not met.
+    pub fn settle_auction(env: Env, creator: Address, auction_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let mut auction: Auction = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Auction(auction_id))
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::AuctionNotFound));
+        if auction.creator != creator {
+            panic_with_error!(&env, TipJarError::AuctionUnauthorized);
+        }
+        if auction.settled {
+            panic_with_error!(&env, TipJarError::AuctionAlreadySettled);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < auction.ends_at {
+            panic_with_error!(&env, TipJarError::AuctionNotEnded);
+        }
+
+        auction.settled = true;
+        env.storage().persistent().set(&DataKey::Auction(auction_id), &auction);
+
+        if auction.highest_bid == 0 || auction.highest_bid < auction.reserve_price {
+            if let Some(winner) = auction.highest_bidder {
+                token::Client::new(&env, &auction.token).transfer(
+                    &env.current_contract_address(),
+                    &winner,
+                    &auction.highest_bid,
+                );
+            }
+            env.events().publish(
+                (symbol_short!("auc_fail"),),
+                (auction_id, auction.highest_bidder, auction.highest_bid),
+            );
+            return;
+        }
+
+        let fee_bp: u32 = env.storage().instance().get(&DataKey::FeeBasisPoints).unwrap_or(0);
+        let fee: i128 = (auction.highest_bid * fee_bp as i128) / 10_000;
+        let mut ins_premium: i128 = 0;
+        let ins_enabled: bool = env.storage().instance().get(&DataKey::InsEnabled).unwrap_or(true);
+        if ins_enabled {
+            if let Some(config) = env
+                .storage()
+                .instance()
+                .get::<DataKey, InsurancePoolConfig>(&DataKey::InsPoolCfg)
+            {
+                ins_premium = (auction.highest_bid * config.tip_premium_bps as i128) / 10_000;
+            }
+        }
+        let creator_amount = auction
+            .highest_bid
+            .checked_sub(fee)
+            .and_then(|a| a.checked_sub(ins_premium))
+            .unwrap_or(0);
+
+        if fee > 0 {
+            let fee_key = DataKey::PlatformFeeBalance(auction.token.clone());
+            let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            let new_fee_bal = current_fee.checked_add(fee).expect("fee overflow");
+            env.storage().instance().set(&fee_key, &new_fee_bal);
+        }
+
+        if ins_premium > 0 {
+            let pool_key = DataKey::InsPoolToken(auction.token.clone());
+            let mut pool: InsurancePool = env
+                .storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or_else(|| InsurancePool {
+                    token: auction.token.clone(),
+                    total_reserves: 0,
+                    total_contributions: 0,
+                    total_claims_paid: 0,
+                    active_claims: 0,
+                    total_claims: 0,
+                    last_payout_time: env.ledger().timestamp(),
+                });
+            pool.total_reserves = pool
+                .total_reserves
+                .checked_add(ins_premium)
+                .expect("insurance reserve overflow");
+            env.storage().persistent().set(&pool_key, &pool);
+        }
+
+        if creator_amount > 0 {
+            let bal_key = DataKey::CreatorBalance(creator.clone(), auction.token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            let new_bal = existing_bal
+                .checked_add(creator_amount)
+                .expect("balance overflow");
+            env.storage().persistent().set(&bal_key, &new_bal);
+
+            let tot_key = DataKey::CreatorTotal(creator.clone(), auction.token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            let new_tot = existing_tot
+                .checked_add(creator_amount)
+                .expect("total overflow");
+            env.storage().persistent().set(&tot_key, &new_tot);
+
+            if let Some(winner) = auction.highest_bidder.clone() {
+                Self::update_leaderboard_stats(&env, &winner, &creator, creator_amount);
+            }
+            Self::track_creator_token(&env, &creator, &auction.token);
+            Self::check_and_award_milestones(&env, &creator, &auction.token, new_tot);
+        }
+
+        env.events().publish(
+            (symbol_short!("auc_sett"),),
+            (auction_id, creator.clone(), auction.highest_bid, auction.token.clone()),
+        );
+    }
+
+    /// Returns auction details by ID.
+    pub fn get_auction(env: Env, auction_id: u64) -> Option<Auction> {
+        env.storage().persistent().get(&DataKey::Auction(auction_id))
+    }
+
+    /// Returns the auction IDs created by a given creator.
+    pub fn get_creator_auctions(env: Env, creator: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CreatorAuctions(creator))
+            .unwrap_or_else(|| Vec::new(env))
     }
 
     /// Authorizes a delegate to withdraw on behalf of `creator`.

@@ -132,6 +132,33 @@ pub struct BatchTip {
     pub amount: i128,
 }
 
+/// A single tip operation used in `batch_tip_v2`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipOperation {
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// A single withdrawal operation used in `batch_withdraw`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawOperation {
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Result for a single operation within a batch call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchResult {
+    /// Whether this individual operation succeeded.
+    pub success: bool,
+    /// Zero-based index of this operation in the input vector.
+    pub index: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LockedTip {
@@ -850,6 +877,10 @@ pub enum TipJarError {
     OptionNotExpired = 96,
     /// Invalid bridge fee.
     InvalidBridgeFee = 97,
+    /// Batch size exceeds the maximum allowed limit.
+    BatchSizeExceeded = 98,
+    /// One or more operations in a batch failed validation.
+    BatchOperationFailed = 99,
 }
 
 #[contract]
@@ -3763,7 +3794,207 @@ impl TipJarContract {
         successful_tips
     }
 
-    // ── milestone rewards ─────────────────────────────────────────────────────
+    // ── batch withdraw ────────────────────────────────────────────────────────
+
+    /// Withdraws balances across multiple tokens in a single transaction.
+    ///
+    /// Each `WithdrawOperation` specifies a `token` and the `amount` to withdraw.
+    /// All operations are validated before any transfer is executed (atomic: all-or-nothing).
+    /// Batch size is capped at 20 to prevent gas exhaustion.
+    ///
+    /// Emits `("batch_wdr",)` with data `(creator, count, operations_count)` on success.
+    /// Emits `("batch_wdr_op",)` with data `(creator, token, amount, index)` for each operation.
+    pub fn batch_withdraw(
+        env: Env,
+        creator: Address,
+        operations: Vec<WithdrawOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        // ── Validation pass (checks before any state change) ─────────────────
+        for op in operations.iter() {
+            if op.amount <= 0 {
+                panic_with_error!(&env, TipJarError::InvalidAmount);
+            }
+
+            let bal_key = DataKey::CreatorBalance(creator.clone(), op.token.clone());
+            let balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&bal_key)
+                .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+
+            if op.amount > balance {
+                panic_with_error!(&env, TipJarError::InsufficientBalance);
+            }
+        }
+
+        // ── Effects pass (state updates before external calls) ────────────────
+        for op in operations.iter() {
+            let bal_key = DataKey::CreatorBalance(creator.clone(), op.token.clone());
+            let balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&bal_key)
+                .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+            env.storage()
+                .persistent()
+                .set(&bal_key, &(balance - op.amount));
+        }
+
+        // ── Interactions pass (external token transfers) ──────────────────────
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let contract_address = env.current_contract_address();
+
+        for (index, op) in operations.iter().enumerate() {
+            token::Client::new(&env, &op.token).transfer(
+                &contract_address,
+                &creator,
+                &op.amount,
+            );
+
+            env.events().publish(
+                (symbol_short!("btch_wdr"),),
+                (creator.clone(), op.token.clone(), op.amount, index as u32),
+            );
+
+            results.push_back(BatchResult {
+                success: true,
+                index: index as u32,
+            });
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_wdr"),),
+            (creator.clone(), op_count),
+        );
+
+        results
+    }
+
+    /// Sends multiple tips in a single transaction, returning per-operation results.
+    ///
+    /// Accepts up to 20 `TipOperation` entries. All amounts are validated before any
+    /// token transfer occurs (atomic: all-or-nothing). A single transfer covers the
+    /// total amount, then balances are distributed to each creator.
+    ///
+    /// Emits `("btch_tip2",)` with data `(tipper, count, total_amount)` on success.
+    /// Emits `("btch_tip_op",)` with data `(tipper, creator, token, amount, index)` per operation.
+    pub fn batch_tip_v2(
+        env: Env,
+        tipper: Address,
+        operations: Vec<TipOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        // ── Validation pass ───────────────────────────────────────────────────
+        // Group totals by token so we can do one transfer per token.
+        let mut token_totals: Map<Address, i128> = Map::new(&env);
+
+        for op in operations.iter() {
+            if op.amount <= 0 {
+                panic_with_error!(&env, TipJarError::InvalidAmount);
+            }
+
+            let whitelisted: bool = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenWhitelist(op.token.clone()))
+                .unwrap_or(false);
+            if !whitelisted {
+                panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+            }
+
+            let existing: i128 = token_totals.get(op.token.clone()).unwrap_or(0);
+            token_totals.set(
+                op.token.clone(),
+                existing.checked_add(op.amount).expect("total overflow"),
+            );
+        }
+
+        // ── Transfer total per token (one transfer per distinct token) ─────────
+        let contract_address = env.current_contract_address();
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(0);
+
+        for token_key in token_totals.keys() {
+            let total: i128 = token_totals.get(token_key.clone()).unwrap_or(0);
+            token::Client::new(&env, &token_key).transfer(&tipper, &contract_address, &total);
+        }
+
+        // ── Effects + Interactions pass ───────────────────────────────────────
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let mut grand_total: i128 = 0;
+
+        for (index, op) in operations.iter().enumerate() {
+            let fee: i128 = (op.amount * fee_bp as i128) / 10_000;
+            let creator_amount = op.amount - fee;
+
+            if fee > 0 {
+                let fee_key = DataKey::PlatformFeeBalance(op.token.clone());
+                let new_fee_bal: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&fee_key)
+                    .unwrap_or(0i128)
+                    .checked_add(fee)
+                    .expect("fee overflow");
+                env.storage().instance().set(&fee_key, &new_fee_bal);
+            }
+
+            let bal_key = DataKey::CreatorBalance(op.creator.clone(), op.token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&bal_key, &existing_bal.checked_add(creator_amount).expect("balance overflow"));
+
+            let tot_key = DataKey::CreatorTotal(op.creator.clone(), op.token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&tot_key, &existing_tot.checked_add(creator_amount).expect("total overflow"));
+
+            Self::update_leaderboard_stats(&env, &tipper, &op.creator, creator_amount);
+
+            env.events().publish(
+                (symbol_short!("btp_op"),),
+                (tipper.clone(), op.creator.clone(), op.token.clone(), creator_amount, index as u32),
+            );
+
+            results.push_back(BatchResult {
+                success: true,
+                index: index as u32,
+            });
+
+            grand_total = grand_total.checked_add(op.amount).expect("grand total overflow");
+        }
+
+        env.events().publish(
+            (symbol_short!("btch_tip2"),),
+            (tipper, op_count, grand_total),
+        );
+
+        results
+    }
 
     /// Checks and awards milestones when a creator reaches specific tip thresholds.
     ///

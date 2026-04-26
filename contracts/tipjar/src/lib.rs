@@ -46,11 +46,8 @@ pub mod privacy_tip;
 // Options trading
 pub mod options;
 
-// Yield farming
-pub mod farming;
-
-// Liquidity mining
-pub mod liquidity_mining;
+// Tip Index Funds
+pub mod index_fund;
 
 // Bonding curves
 pub mod bonding_curve;
@@ -583,6 +580,8 @@ pub enum DataKey {
     Subscription(Address, Address),
     /// Human-readable reason stored when the contract is paused.
     PauseReason,
+    /// Optional timestamp (unix seconds) after which the contract auto-unpauses.
+    PauseUntil,
     /// TipMetadata keyed by (creator, tip_index).
     TipHistory(Address, u64),
     /// Total number of tips with metadata stored for a creator.
@@ -711,34 +710,14 @@ pub enum DataKey {
     BridgeEnabled,
     /// Bridge fee in basis points.
     BridgeFeeBps,
-    // ── Farming ───────────────────────────────────────────────────────────────
-    /// Farming pool record keyed by pool ID.
-    FarmingPool(u64),
-    /// Farming position keyed by (pool_id, staker).
-    FarmingPosition(u64, Address),
-    /// Global farming pool ID counter.
-    FarmingPoolCounter,
-    // ── Liquidity Mining ──────────────────────────────────────────────────────
-    /// Liquidity mining program record keyed by program ID.
-    LmProgram(u64),
-    /// Provider position in a mining program keyed by (program_id, provider).
-    LmPosition(u64, Address),
-    /// Global liquidity mining program ID counter.
-    LmProgramCounter,
-    /// List of program IDs a provider has participated in.
-    LmProviderPrograms(Address),
-    // ── Bonding Curves ────────────────────────────────────────────────────────
-    /// Bonding curve record keyed by curve ID.
-    BondingCurve(u64),
-    /// Global bonding curve ID counter.
-    BondingCurveCounter,
-    // ── TWAP Oracle ───────────────────────────────────────────────────────────
-    /// TWAP oracle config and state keyed by oracle ID.
-    TwapOracle(u64),
-    /// Individual ring-buffer observation keyed by (oracle_id, slot_index).
-    TwapObservation(u64, u32),
-    /// Global TWAP oracle ID counter.
-    TwapOracleCounter,
+    /// Index fund record by ID.
+    IndexFund(u64),
+    /// Global index fund counter.
+    IndexFundCounter,
+    /// User share position in a fund keyed by (fund_id, holder).
+    IndexFundShare(u64, Address),
+    /// Creator allocation within a fund keyed by (fund_id, creator).
+    IndexCreatorAlloc(u64, Address),
 }
 
 #[contracterror]
@@ -917,72 +896,20 @@ pub enum TipJarError {
     OptionNotExpired = 96,
     /// Invalid bridge fee.
     InvalidBridgeFee = 97,
-    /// Batch size exceeds the maximum allowed limit.
-    BatchSizeExceeded = 98,
-    /// One or more operations in a batch failed validation.
-    BatchOperationFailed = 99,
-    // ── Farming errors ────────────────────────────────────────────────────────
-    /// Farming pool not found.
-    FarmingPoolNotFound = 100,
-    /// Farming position not found.
-    FarmingPositionNotFound = 101,
-    /// Farming lock period has not expired yet.
-    FarmingLockNotExpired = 102,
-    // ── Liquidity mining errors ───────────────────────────────────────────────
-    /// Liquidity mining program not found.
-    LmProgramNotFound = 103,
-    /// Liquidity mining position not found.
-    LmPositionNotFound = 104,
-    /// Mining program is not active.
-    LmProgramInactive = 105,
-    /// Mining program has ended.
-    LmProgramEnded = 106,
-    /// Nothing to claim — no vested rewards available.
-    LmNothingToClaim = 107,
-    /// All allocated rewards have been distributed.
-    LmRewardsExhausted = 108,
-    /// Reward rate must be greater than zero.
-    LmInvalidRate = 109,
-    /// Vesting parameters are invalid (duration < cliff or exceeds maximum).
-    LmInvalidVesting = 110,
-    /// Program end time is in the past.
-    LmInvalidEndTime = 111,
-    /// Proposed boost is not higher than the current boost.
-    LmBoostTooLow = 112,
-    // ── Bonding curve errors ──────────────────────────────────────────────────
-    /// Bonding curve not found.
-    BcNotFound = 113,
-    /// Bonding curve is inactive.
-    BcInactive = 114,
-    /// Curve parameters are invalid.
-    BcInvalidParams = 115,
-    /// Fee exceeds the maximum allowed for bonding curves.
-    BcFeeTooHigh = 116,
-    /// Slippage tolerance exceeded.
-    BcSlippageExceeded = 117,
-    /// Curve reserve is insufficient to cover the sell.
-    BcInsufficientReserve = 118,
-    /// Token supply is insufficient to cover the sell amount.
-    BcInsufficientSupply = 119,
-    /// Price calculation returned zero or negative.
-    BcPriceCalculationFailed = 120,
-    /// No fees available to withdraw.
-    BcNoFeesToWithdraw = 121,
-    // ── TWAP oracle errors ────────────────────────────────────────────────────
-    /// TWAP oracle not found.
-    TwapOracleNotFound = 122,
-    /// TWAP oracle is inactive.
-    TwapOracleInactive = 123,
-    /// Price value is invalid (zero or negative).
-    TwapInvalidPrice = 124,
-    /// Observation window is outside the allowed range.
-    TwapInvalidWindow = 125,
-    /// Oracle parameters are invalid (e.g. capacity out of range).
-    TwapInvalidParams = 126,
-    /// Price update submitted too soon after the previous one.
-    TwapUpdateTooFrequent = 127,
-    /// Not enough observations to compute a TWAP.
-    TwapInsufficientData = 128,
+    /// Index fund not found.
+    IndexFundNotFound = 98,
+    /// Index fund is not active.
+    IndexFundNotActive = 99,
+    /// Component weights do not sum to 10000 bps.
+    InvalidIndexWeights = 100,
+    /// Index fund requires at least 2 creators.
+    IndexFundTooFewCreators = 101,
+    /// Insufficient fund shares for withdrawal.
+    InsufficientFundShares = 102,
+    /// Deposit amount is below the minimum.
+    IndexDepositTooSmall = 103,
+    /// Attempted to unpause a contract that is not currently paused.
+    NotPaused = 104,
 }
 
 #[contract]
@@ -993,14 +920,36 @@ impl TipJarContract {
     // ── pause guard ──────────────────────────────────────────────────────────
 
     fn require_not_paused(env: &Env) {
-        if env
+        if Self::check_is_paused(env) {
+            panic_with_error!(env, TipJarError::ContractPaused);
+        }
+    }
+
+    /// Core pause check: returns true if the contract is currently paused.
+    /// Handles auto-unpause by clearing pause state when `PauseUntil` has elapsed.
+    fn check_is_paused(env: &Env) -> bool {
+        let paused: bool = env
             .storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            panic_with_error!(env, TipJarError::ContractPaused);
+            .unwrap_or(false);
+        if !paused {
+            return false;
         }
+        // Check auto-unpause
+        if let Some(unpause_time) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u64>(&DataKey::PauseUntil)
+        {
+            if env.ledger().timestamp() >= unpause_time {
+                env.storage().instance().set(&DataKey::Paused, &false);
+                env.storage().instance().remove(&DataKey::PauseReason);
+                env.storage().instance().remove(&DataKey::PauseUntil);
+                return false;
+            }
+        }
+        true
     }
 
     fn add_creator_auction(env: &Env, creator: &Address, auction_id: u64) {
@@ -1128,8 +1077,9 @@ impl TipJarContract {
     /// Pauses all state-changing operations. Admin only.
     ///
     /// `reason` is stored on-chain for transparency.
-    /// Emits `("paused",)` with data `(admin, reason)`.
-    pub fn pause(env: Env, admin: Address, reason: String) {
+    /// `duration_seconds` optionally sets an auto-unpause time; pass `None` for indefinite pause.
+    /// Emits `("paused",)` with data `(admin, reason, unpause_time_or_zero)`.
+    pub fn pause(env: Env, admin: Address, reason: String, duration_seconds: Option<u64>) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -1137,11 +1087,19 @@ impl TipJarContract {
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.storage().instance().set(&DataKey::PauseReason, &reason);
+        let unpause_time: u64 = if let Some(duration) = duration_seconds {
+            let t = env.ledger().timestamp().saturating_add(duration);
+            env.storage().instance().set(&DataKey::PauseUntil, &t);
+            t
+        } else {
+            env.storage().instance().remove(&DataKey::PauseUntil);
+            0
+        };
         env.events()
-            .publish((symbol_short!("paused"),), (admin, reason));
+            .publish((symbol_short!("paused"),), (admin, reason, unpause_time));
     }
 
-    /// Resumes normal operations. Admin only.
+    /// Resumes normal operations. Admin only. Fails if contract is not paused.
     ///
     /// Emits `("unpaused",)` with data `admin`.
     pub fn unpause(env: Env, admin: Address) {
@@ -1150,17 +1108,31 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
+        if !Self::check_is_paused(&env) {
+            panic_with_error!(&env, TipJarError::NotPaused);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().remove(&DataKey::PauseReason);
+        env.storage().instance().remove(&DataKey::PauseUntil);
         env.events().publish((symbol_short!("unpaused"),), admin);
     }
 
-    /// Returns `true` when the contract is paused.
+    /// Returns `true` when the contract is currently paused (respects auto-unpause).
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::Paused)
-            .unwrap_or(false)
+        Self::check_is_paused(&env)
+    }
+
+    /// Returns the pause reason if the contract is paused, or `None` otherwise.
+    pub fn get_pause_reason(env: Env) -> Option<String> {
+        if !Self::check_is_paused(&env) {
+            return None;
+        }
+        env.storage().instance().get(&DataKey::PauseReason)
+    }
+
+    /// Returns the auto-unpause timestamp if set, or `None` for indefinite pause.
+    pub fn get_pause_until(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PauseUntil)
     }
 
     /// Transfers `amount` of `token` from `sender` into escrow for `creator`.
@@ -6290,5 +6262,142 @@ impl TipJarContract {
         );
 
         expired_count
+    }
+
+    // ── index funds ──────────────────────────────────────────────────────────
+
+    /// Create a new tip index fund with a basket of creators.
+    /// `components` must have at least 2 entries and weights must sum to 10_000 bps.
+    pub fn create_index_fund(
+        env: Env,
+        manager: Address,
+        token: Address,
+        name: String,
+        components: Vec<index_fund::IndexComponent>,
+    ) -> u64 {
+        manager.require_auth();
+        Self::require_not_paused(&env);
+
+        if components.len() < 2 {
+            panic_with_error!(&env, TipJarError::IndexFundTooFewCreators);
+        }
+        if !index_fund::composition::validate_weights(&components) {
+            panic_with_error!(&env, TipJarError::InvalidIndexWeights);
+        }
+
+        let fund_id = index_fund::composition::create_index_fund(
+            &env, &manager, &token, name, components,
+        );
+
+        env.events().publish(
+            (symbol_short!("idx_new"),),
+            (manager, fund_id),
+        );
+
+        fund_id
+    }
+
+    /// Update the composition of an existing index fund (manager only).
+    pub fn update_index_composition(
+        env: Env,
+        caller: Address,
+        fund_id: u64,
+        new_components: Vec<index_fund::IndexComponent>,
+    ) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+
+        if new_components.len() < 2 {
+            panic_with_error!(&env, TipJarError::IndexFundTooFewCreators);
+        }
+        if !index_fund::composition::validate_weights(&new_components) {
+            panic_with_error!(&env, TipJarError::InvalidIndexWeights);
+        }
+
+        index_fund::composition::update_composition(&env, fund_id, &caller, new_components);
+
+        env.events().publish(
+            (symbol_short!("idx_upd"),),
+            (caller, fund_id),
+        );
+    }
+
+    /// Rebalance a fund's creator allocations to match current target weights.
+    pub fn rebalance_index_fund(env: Env, caller: Address, fund_id: u64) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+
+        index_fund::rebalance::rebalance(&env, fund_id, &caller);
+
+        env.events().publish(
+            (symbol_short!("idx_reb"),),
+            (caller, fund_id),
+        );
+    }
+
+    /// Deposit tokens into an index fund and receive shares.
+    /// Returns the number of shares minted.
+    pub fn deposit_index_fund(
+        env: Env,
+        depositor: Address,
+        fund_id: u64,
+        amount: i128,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+
+        if amount < index_fund::MIN_DEPOSIT {
+            panic_with_error!(&env, TipJarError::IndexDepositTooSmall);
+        }
+
+        let shares = index_fund::shares::deposit(&env, fund_id, &depositor, amount);
+
+        env.events().publish(
+            (symbol_short!("idx_dep"),),
+            (depositor, fund_id, amount, shares),
+        );
+
+        shares
+    }
+
+    /// Withdraw from an index fund by redeeming shares.
+    /// Returns the token amount returned to the holder.
+    pub fn withdraw_index_fund(
+        env: Env,
+        holder: Address,
+        fund_id: u64,
+        shares: i128,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+
+        if shares <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let amount_out = index_fund::shares::withdraw(&env, fund_id, &holder, shares);
+
+        env.events().publish(
+            (symbol_short!("idx_wdr"),),
+            (holder, fund_id, shares, amount_out),
+        );
+
+        amount_out
+    }
+
+    /// Get the current NAV (net asset value) per share for a fund.
+    pub fn get_index_fund_nav(env: Env, fund_id: u64) -> i128 {
+        index_fund::shares::get_nav(&env, fund_id)
+    }
+
+    /// Get the share balance of a holder in a fund.
+    pub fn get_index_fund_shares(env: Env, fund_id: u64, holder: Address) -> i128 {
+        index_fund::shares::get_shares(&env, fund_id, &holder)
+    }
+
+    /// Get the current creator allocations for a fund.
+    pub fn get_index_fund_allocations(
+        env: Env,
+        fund_id: u64,
+    ) -> Vec<(Address, i128)> {
+        index_fund::rebalance::get_allocations(&env, fund_id)
     }
 }

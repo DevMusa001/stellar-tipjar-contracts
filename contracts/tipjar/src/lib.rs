@@ -686,7 +686,7 @@ pub enum DataKey {
     InsAdmin,
     /// List of claim IDs for a creator per token.
     InsClms(Address, Address),
-    /// Option contract by ID.
+a    /// Option contract by ID.
     Option(u64),
     /// Option counter for ID generation.
     OptionCounter,
@@ -5891,7 +5891,7 @@ impl TipJarContract {
             .get(&DataKey::BridgeEnabled)
             .unwrap_or(false)
     }
-
+a
     // ── options trading ──────────────────────────────────────────────────────
 
     /// Initialize options trading system with default pricing parameters.

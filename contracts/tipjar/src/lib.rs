@@ -7,6 +7,7 @@ pub mod integrations;
 pub mod security;
 pub mod bridge;
 pub mod privacy;
+pub mod synthetic;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
@@ -511,13 +512,43 @@ pub enum LeaderboardType {
     TopCreators,
 }
 
-/// Immutable snapshot of key contract state for migration / audit purposes.
+/// State snapshot keyed by snapshot_id.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateSnapshot {
     pub snapshot_id: u64,
     pub timestamp: u64,
     pub metadata: soroban_sdk::String,
+}
+
+/// Circuit breaker configuration.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircuitBreakerConfig {
+    /// Maximum amount for a single tip before triggering breaker.
+    pub max_single_tip: i128,
+    /// Maximum total volume in a sliding window before triggering breaker.
+    pub max_volume_window: i128,
+    /// Window duration in seconds.
+    pub window_seconds: u64,
+    /// Cooldown duration in seconds when halted.
+    pub cooldown_seconds: u64,
+    /// Whether the circuit breaker is active.
+    pub enabled: bool,
+}
+
+/// Current state of the circuit breaker.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircuitBreakerState {
+    /// Start time of the current volume window.
+    pub window_start: u64,
+    /// Total volume processed in the current window.
+    pub current_volume: i128,
+    /// Timestamp until which the contract is halted (0 if not halted).
+    pub halted_until: u64,
+    /// Number of times the breaker has been triggered.
+    pub trigger_count: u32,
 }
 
 /// Storage layout for persistent contract data.
@@ -1133,6 +1164,65 @@ impl TipJarContract {
     /// Returns the auto-unpause timestamp if set, or `None` for indefinite pause.
     pub fn get_pause_until(env: Env) -> Option<u64> {
         env.storage().instance().get(&DataKey::PauseUntil)
+    }
+
+    /// Sets the circuit breaker configuration. Admin only.
+    pub fn set_circuit_breaker_config(env: Env, admin: Address, config: CircuitBreakerConfig) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if config.window_seconds == 0 || config.cooldown_seconds == 0 {
+            panic_with_error!(&env, TipJarError::InvalidCircuitBreakerConfig);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::CircuitBreakerConfig, &config);
+        env.events()
+            .publish((symbol_short!("cb_cfg"),), config);
+    }
+
+    /// Returns the current circuit breaker configuration.
+    pub fn get_circuit_breaker_config(env: Env) -> Option<CircuitBreakerConfig> {
+        env.storage().instance().get(&DataKey::CircuitBreakerConfig)
+    }
+
+    /// Returns the current circuit breaker state.
+    pub fn get_circuit_breaker_state(env: Env) -> Option<CircuitBreakerState> {
+        env.storage().instance().get(&DataKey::CircuitBreakerState)
+    }
+
+    /// Manually triggers the circuit breaker. Admin only.
+    pub fn trigger_circuit_breaker(env: Env, admin: Address, reason: soroban_sdk::Symbol) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let config = env
+            .storage()
+            .instance()
+            .get::<DataKey, CircuitBreakerConfig>(&DataKey::CircuitBreakerConfig)
+            .unwrap_or_else(|| {
+                panic_with_error!(&env, TipJarError::InvalidCircuitBreakerConfig)
+            });
+
+        let mut state = env
+            .storage()
+            .instance()
+            .get::<DataKey, CircuitBreakerState>(&DataKey::CircuitBreakerState)
+            .unwrap_or(CircuitBreakerState {
+                window_start: env.ledger().timestamp(),
+                current_volume: 0,
+                halted_until: 0,
+                trigger_count: 0,
+            });
+
+        Self::trigger_breaker(&env, &mut state, &config, reason);
     }
 
     /// Transfers `amount` of `token` from `sender` into escrow for `creator`.

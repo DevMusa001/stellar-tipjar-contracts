@@ -547,6 +547,8 @@ pub enum DataKey {
     Subscription(Address, Address),
     /// Human-readable reason stored when the contract is paused.
     PauseReason,
+    /// Optional timestamp (unix seconds) after which the contract auto-unpauses.
+    PauseUntil,
     /// TipMetadata keyed by (creator, tip_index).
     TipHistory(Address, u64),
     /// Total number of tips with metadata stored for a creator.
@@ -873,6 +875,8 @@ pub enum TipJarError {
     InsufficientFundShares = 102,
     /// Deposit amount is below the minimum.
     IndexDepositTooSmall = 103,
+    /// Attempted to unpause a contract that is not currently paused.
+    NotPaused = 104,
 }
 
 #[contract]
@@ -883,14 +887,36 @@ impl TipJarContract {
     // ── pause guard ──────────────────────────────────────────────────────────
 
     fn require_not_paused(env: &Env) {
-        if env
+        if Self::check_is_paused(env) {
+            panic_with_error!(env, TipJarError::ContractPaused);
+        }
+    }
+
+    /// Core pause check: returns true if the contract is currently paused.
+    /// Handles auto-unpause by clearing pause state when `PauseUntil` has elapsed.
+    fn check_is_paused(env: &Env) -> bool {
+        let paused: bool = env
             .storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            panic_with_error!(env, TipJarError::ContractPaused);
+            .unwrap_or(false);
+        if !paused {
+            return false;
         }
+        // Check auto-unpause
+        if let Some(unpause_time) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u64>(&DataKey::PauseUntil)
+        {
+            if env.ledger().timestamp() >= unpause_time {
+                env.storage().instance().set(&DataKey::Paused, &false);
+                env.storage().instance().remove(&DataKey::PauseReason);
+                env.storage().instance().remove(&DataKey::PauseUntil);
+                return false;
+            }
+        }
+        true
     }
 
     fn add_creator_auction(env: &Env, creator: &Address, auction_id: u64) {
@@ -1018,8 +1044,9 @@ impl TipJarContract {
     /// Pauses all state-changing operations. Admin only.
     ///
     /// `reason` is stored on-chain for transparency.
-    /// Emits `("paused",)` with data `(admin, reason)`.
-    pub fn pause(env: Env, admin: Address, reason: String) {
+    /// `duration_seconds` optionally sets an auto-unpause time; pass `None` for indefinite pause.
+    /// Emits `("paused",)` with data `(admin, reason, unpause_time_or_zero)`.
+    pub fn pause(env: Env, admin: Address, reason: String, duration_seconds: Option<u64>) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -1027,11 +1054,19 @@ impl TipJarContract {
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.storage().instance().set(&DataKey::PauseReason, &reason);
+        let unpause_time: u64 = if let Some(duration) = duration_seconds {
+            let t = env.ledger().timestamp().saturating_add(duration);
+            env.storage().instance().set(&DataKey::PauseUntil, &t);
+            t
+        } else {
+            env.storage().instance().remove(&DataKey::PauseUntil);
+            0
+        };
         env.events()
-            .publish((symbol_short!("paused"),), (admin, reason));
+            .publish((symbol_short!("paused"),), (admin, reason, unpause_time));
     }
 
-    /// Resumes normal operations. Admin only.
+    /// Resumes normal operations. Admin only. Fails if contract is not paused.
     ///
     /// Emits `("unpaused",)` with data `admin`.
     pub fn unpause(env: Env, admin: Address) {
@@ -1040,17 +1075,31 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
+        if !Self::check_is_paused(&env) {
+            panic_with_error!(&env, TipJarError::NotPaused);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().remove(&DataKey::PauseReason);
+        env.storage().instance().remove(&DataKey::PauseUntil);
         env.events().publish((symbol_short!("unpaused"),), admin);
     }
 
-    /// Returns `true` when the contract is paused.
+    /// Returns `true` when the contract is currently paused (respects auto-unpause).
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::Paused)
-            .unwrap_or(false)
+        Self::check_is_paused(&env)
+    }
+
+    /// Returns the pause reason if the contract is paused, or `None` otherwise.
+    pub fn get_pause_reason(env: Env) -> Option<String> {
+        if !Self::check_is_paused(&env) {
+            return None;
+        }
+        env.storage().instance().get(&DataKey::PauseReason)
+    }
+
+    /// Returns the auto-unpause timestamp if set, or `None` for indefinite pause.
+    pub fn get_pause_until(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PauseUntil)
     }
 
     /// Transfers `amount` of `token` from `sender` into escrow for `creator`.

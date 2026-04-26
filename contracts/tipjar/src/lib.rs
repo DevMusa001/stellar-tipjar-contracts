@@ -46,6 +46,12 @@ pub mod privacy_tip;
 // Options trading
 pub mod options;
 
+// Yield farming
+pub mod farming;
+
+// Liquidity mining
+pub mod liquidity_mining;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -699,6 +705,22 @@ pub enum DataKey {
     BridgeEnabled,
     /// Bridge fee in basis points.
     BridgeFeeBps,
+    // ── Farming ───────────────────────────────────────────────────────────────
+    /// Farming pool record keyed by pool ID.
+    FarmingPool(u64),
+    /// Farming position keyed by (pool_id, staker).
+    FarmingPosition(u64, Address),
+    /// Global farming pool ID counter.
+    FarmingPoolCounter,
+    // ── Liquidity Mining ──────────────────────────────────────────────────────
+    /// Liquidity mining program record keyed by program ID.
+    LmProgram(u64),
+    /// Provider position in a mining program keyed by (program_id, provider).
+    LmPosition(u64, Address),
+    /// Global liquidity mining program ID counter.
+    LmProgramCounter,
+    /// List of program IDs a provider has participated in.
+    LmProviderPrograms(Address),
 }
 
 #[contracterror]
@@ -881,6 +903,34 @@ pub enum TipJarError {
     BatchSizeExceeded = 98,
     /// One or more operations in a batch failed validation.
     BatchOperationFailed = 99,
+    // ── Farming errors ────────────────────────────────────────────────────────
+    /// Farming pool not found.
+    FarmingPoolNotFound = 100,
+    /// Farming position not found.
+    FarmingPositionNotFound = 101,
+    /// Farming lock period has not expired yet.
+    FarmingLockNotExpired = 102,
+    // ── Liquidity mining errors ───────────────────────────────────────────────
+    /// Liquidity mining program not found.
+    LmProgramNotFound = 103,
+    /// Liquidity mining position not found.
+    LmPositionNotFound = 104,
+    /// Mining program is not active.
+    LmProgramInactive = 105,
+    /// Mining program has ended.
+    LmProgramEnded = 106,
+    /// Nothing to claim — no vested rewards available.
+    LmNothingToClaim = 107,
+    /// All allocated rewards have been distributed.
+    LmRewardsExhausted = 108,
+    /// Reward rate must be greater than zero.
+    LmInvalidRate = 109,
+    /// Vesting parameters are invalid (duration < cliff or exceeds maximum).
+    LmInvalidVesting = 110,
+    /// Program end time is in the past.
+    LmInvalidEndTime = 111,
+    /// Proposed boost is not higher than the current boost.
+    LmBoostTooLow = 112,
 }
 
 #[contract]
@@ -3994,6 +4044,139 @@ impl TipJarContract {
         );
 
         results
+    }
+
+    // ── liquidity mining ──────────────────────────────────────────────────────
+
+    /// Creates a new liquidity mining program.
+    ///
+    /// Transfers `total_rewards` of `reward_token` from `admin` into the contract.
+    /// Returns the new program ID.
+    ///
+    /// * `reward_rate_bps`  — annual reward rate in basis points (e.g. 2000 = 20 %).
+    /// * `vesting_cliff`    — seconds before any rewards unlock.
+    /// * `vesting_duration` — total vesting window in seconds (>= cliff, <= 4 years).
+    /// * `end_time`         — program end timestamp; pass 0 for no end.
+    ///
+    /// Emits `("lm_create",)` with `(program_id, lp_token, reward_token, total_rewards, rate_bps)`.
+    pub fn lm_create_program(
+        env: Env,
+        admin: Address,
+        lp_token: Address,
+        reward_token: Address,
+        total_rewards: i128,
+        reward_rate_bps: u32,
+        vesting_cliff: u64,
+        vesting_duration: u64,
+        end_time: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        liquidity_mining::create_program(
+            &env,
+            &admin,
+            &lp_token,
+            &reward_token,
+            total_rewards,
+            reward_rate_bps,
+            vesting_cliff,
+            vesting_duration,
+            end_time,
+        )
+    }
+
+    /// Stakes `amount` LP tokens into a liquidity mining program.
+    ///
+    /// Emits `("lm_stake",)` with `(provider, program_id, amount, new_total_staked)`.
+    pub fn lm_stake(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::stake(&env, &provider, program_id, amount);
+    }
+
+    /// Unstakes `amount` LP tokens from a liquidity mining program.
+    ///
+    /// Accrues pending rewards before reducing the position.
+    /// Emits `("lm_unstk",)` with `(provider, program_id, amount, remaining_staked)`.
+    pub fn lm_unstake(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::unstake(&env, &provider, program_id, amount);
+    }
+
+    /// Claims all vested mining rewards for a provider. Returns the amount claimed.
+    ///
+    /// Emits `("lm_claim",)` with `(provider, program_id, amount_claimed)`.
+    pub fn lm_claim_rewards(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+        liquidity_mining::claim_rewards(&env, &provider, program_id)
+    }
+
+    /// Applies a boost to a provider's position by locking rewards for `lock_duration` seconds.
+    ///
+    /// Boost scales linearly from 1× (no lock) to 3× (lock = 1 year).
+    /// Only increasing boosts are accepted.
+    /// Emits `("lm_boost",)` with `(provider, program_id, new_boost, lock_until)`.
+    pub fn lm_apply_boost(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        lock_duration: u64,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::apply_boost(&env, &provider, program_id, lock_duration);
+    }
+
+    /// Deactivates a mining program. Existing positions can still claim vested rewards.
+    ///
+    /// Emits `("lm_deact",)` with `(program_id,)`.
+    pub fn lm_deactivate_program(env: Env, admin: Address, program_id: u64) {
+        Self::require_not_paused(&env);
+        liquidity_mining::deactivate_program(&env, &admin, program_id);
+    }
+
+    /// Returns the vesting schedule info for a provider's position.
+    pub fn lm_get_vesting_info(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> liquidity_mining::VestingInfo {
+        liquidity_mining::get_vesting_info(&env, &provider, program_id)
+    }
+
+    /// Returns a mining program by ID.
+    pub fn lm_get_program(env: Env, program_id: u64) -> liquidity_mining::MiningProgram {
+        liquidity_mining::get_program_info(&env, program_id)
+    }
+
+    /// Returns a provider's position in a mining program (with accrued rewards).
+    pub fn lm_get_position(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> liquidity_mining::MiningPosition {
+        liquidity_mining::get_position_info(&env, &provider, program_id)
+    }
+
+    /// Returns all program IDs a provider has participated in.
+    pub fn lm_get_provider_programs(env: Env, provider: Address) -> Vec<u64> {
+        liquidity_mining::get_provider_program_ids(&env, &provider)
+    }
+
+    /// Returns the pending (not yet vested) rewards for a provider in a program.
+    pub fn lm_get_pending_rewards(env: Env, provider: Address, program_id: u64) -> i128 {
+        liquidity_mining::get_pending_rewards(&env, &provider, program_id)
     }
 
     /// Checks and awards milestones when a creator reaches specific tip thresholds.

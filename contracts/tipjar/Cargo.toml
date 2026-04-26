@@ -57,3 +57,7 @@ path = "tests/options_trading_tests.rs"
 name = "batch_operations_tests"
 path = "tests/batch_operations_tests.rs"
 
+[[test]]
+name = "liquidity_mining_tests"
+path = "tests/liquidity_mining_tests.rs"
+

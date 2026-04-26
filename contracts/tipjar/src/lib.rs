@@ -4809,5 +4809,83 @@ impl TipJarContract {
             .get(&DataKey::InsClms(creator, token))
             .unwrap_or_else(|| Vec::new(&env))
     }
+
+    // ── cross-chain bridge ───────────────────────────────────────────────────
+
+    /// Sets the authorized bridge relayer and bridge token. Admin only.
+    ///
+    /// Emits `("bridge_cfg",)` with data `(relayer, token)`.
+    pub fn set_bridge_relayer(env: Env, admin: Address, relayer: Address, token: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::BridgeRelayer, &relayer);
+        env.storage().instance().set(&DataKey::BridgeToken, &token);
+        env.storage().instance().set(&DataKey::BridgeEnabled, &true);
+        env.events().publish(
+            (symbol_short!("br_cfg"),),
+            (relayer, token),
+        );
+    }
+
+    /// Processes a bridged tip submitted by an authorized relayer.
+    ///
+    /// Validates the tip, deducts bridge fees, transfers funds from the relayer
+    /// into contract escrow, and credits the creator's balance.
+    /// Emits `("bridge", creator)` with data `(source_chain, source_tx_hash, amount, fee)`.
+    pub fn bridge_tip(env: Env, relayer: Address, tip: bridge::BridgeTip) {
+        Self::require_not_paused(&env);
+        if let Err(e) = bridge::relayer::process_bridge_tip(&env, &relayer, &tip) {
+            panic_with_error!(&env, e);
+        }
+    }
+
+    /// Sets the bridge fee in basis points. Admin only.
+    ///
+    /// Maximum fee is 500 bps (5%).
+    /// Emits `("bridge_fee",)` with data `fee_bps`.
+    pub fn set_bridge_fee(env: Env, admin: Address, fee_bps: u32) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if fee_bps > 500 {
+            panic_with_error!(&env, TipJarError::InvalidBridgeFee);
+        }
+        env.storage().instance().set(&DataKey::BridgeFeeBps, &fee_bps);
+        env.events().publish((symbol_short!("br_fee"),), fee_bps);
+    }
+
+    /// Returns the current bridge fee in basis points.
+    pub fn get_bridge_fee(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::BridgeFeeBps)
+            .unwrap_or(0)
+    }
+
+    /// Enables or disables the bridge feature. Admin only.
+    ///
+    /// Emits `("bridge_en",)` with data `enabled`.
+    pub fn enable_bridge(env: Env, admin: Address, enabled: bool) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::BridgeEnabled, &enabled);
+        env.events().publish((symbol_short!("br_en"),), enabled);
+    }
+
+    /// Returns `true` if the bridge feature is enabled.
+    pub fn is_bridge_enabled(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::BridgeEnabled)
+            .unwrap_or(false)
+    }
 }
 

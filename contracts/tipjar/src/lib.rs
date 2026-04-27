@@ -85,6 +85,9 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
+// Access control lists for tip operations
+pub mod acl;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -851,6 +854,16 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
+    /// ACL role assigned to an address.
+    AclRole(Address),
+    /// Explicit permission flag keyed by (subject, permission_string).
+    AclPermission(Address, String),
+    /// ACL change history entry keyed by index.
+    AclChangeLog(u64),
+    /// Total number of ACL change history entries.
+    AclChangeCount,
+    /// Custom role definition keyed by role name.
+    AclCustomRole(String),
 }
 
 #[contracterror]
@@ -8862,6 +8875,59 @@ a
         let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
         let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
+    }
+
+    // ── access control lists ─────────────────────────────────────────────────
+
+    /// Assign a built-in or custom role to `subject`. Caller must be admin or
+    /// hold a strictly higher role level than the role being assigned.
+    pub fn acl_assign_role(env: Env, caller: Address, subject: Address, role_name: String) {
+        acl::assign_role(&env, &caller, &subject, &role_name);
+    }
+
+    /// Revoke the role of `subject`. Caller must be admin or hold a higher level.
+    pub fn acl_revoke_role(env: Env, caller: Address, subject: Address) {
+        acl::revoke_role(&env, &caller, &subject);
+    }
+
+    /// Define a new custom role (admin only).
+    pub fn acl_define_custom_role(env: Env, caller: Address, role_name: String, level: u32) {
+        acl::define_custom_role(&env, &caller, &role_name, level);
+    }
+
+    /// Grant an explicit permission string to `subject`.
+    pub fn acl_grant_permission(env: Env, caller: Address, subject: Address, permission: String) {
+        acl::grant_permission(&env, &caller, &subject, &permission);
+    }
+
+    /// Revoke an explicit permission from `subject`.
+    pub fn acl_revoke_permission(env: Env, caller: Address, subject: Address, permission: String) {
+        acl::revoke_permission(&env, &caller, &subject, &permission);
+    }
+
+    /// Returns `true` if `subject` has the explicit `permission`.
+    pub fn acl_check_permission(env: Env, subject: Address, permission: String) -> bool {
+        acl::check_permission(&env, &subject, &permission)
+    }
+
+    /// Returns the role assigned to `subject`, or `None`.
+    pub fn acl_get_role(env: Env, subject: Address) -> Option<acl::AclRole> {
+        acl::get_role(&env, &subject)
+    }
+
+    /// Returns `true` if `subject`'s role level is >= `required_level`.
+    pub fn acl_has_min_level(env: Env, subject: Address, required_level: u32) -> bool {
+        acl::has_min_level(&env, &subject, required_level)
+    }
+
+    /// Returns a change history entry by index.
+    pub fn acl_get_change_entry(env: Env, index: u64) -> Option<acl::AclChangeEntry> {
+        acl::get_change_entry(&env, index)
+    }
+
+    /// Returns the total number of ACL change history entries.
+    pub fn acl_get_change_count(env: Env) -> u64 {
+        acl::get_change_count(&env)
     }
 }
 

@@ -1,7 +1,7 @@
 //! Voting mechanism for governance
 
 use super::{Vote, VoteChoice, DataKey};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Cast a vote on a proposal
 pub fn cast_vote(
@@ -105,3 +105,4 @@ pub fn get_vote_breakdown(env: &Env, proposal_id: u64) -> (i128, i128, i128) {
     let total_votes = proposal.votes_for + proposal.votes_against;
     (proposal.votes_for, proposal.votes_against, total_votes)
 }
+

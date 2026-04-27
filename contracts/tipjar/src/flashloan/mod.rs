@@ -4,7 +4,7 @@ pub mod receiver;
 
 use soroban_sdk::{panic_with_error, symbol_short, token, Address, Bytes, Env};
 
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 
 use receiver::FlashLoanReceiverClient;
 
@@ -14,7 +14,7 @@ pub const FLASH_LOAN_FEE_BPS: i128 = 9;
 /// Executes a flash loan and verifies repayment with fee.
 pub fn flash_loan(env: &Env, receiver: &Address, token: &Address, amount: i128, params: &Bytes) {
     if amount <= 0 {
-        panic_with_error!(env, TipJarError::InvalidAmount);
+        panic_with_error!(env, CoreError::InvalidAmount);
     }
 
     enter_guard(env);
@@ -85,3 +85,7 @@ mod tests {
         assert_eq!(calculate_fee(10_000), 9);
     }
 }
+
+
+
+

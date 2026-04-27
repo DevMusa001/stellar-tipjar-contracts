@@ -4,7 +4,7 @@
 //! to make informed decisions about minting and redemption.
 
 use soroban_sdk::{Address, Env, Vec};
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 use super::types::SyntheticAsset;
 use super::oracle::get_oracle_price;
 use super::supply::{get_total_supply, get_total_collateral, get_collateralization_ratio};
@@ -23,12 +23,12 @@ use super::redemption::calculate_redemption_value;
 /// # Requirements
 /// - Validates: Requirements 9.1, 9.10
 pub fn get_synthetic_asset(env: &Env, asset_id: u64) -> Result<SyntheticAsset, TipJarError> {
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     Ok(asset)
 }
@@ -45,7 +45,7 @@ pub fn get_synthetic_asset(env: &Env, asset_id: u64) -> Result<SyntheticAsset, T
 /// # Requirements
 /// - Validates: Requirements 9.2
 pub fn get_creator_synthetic_assets(env: &Env, creator: &Address) -> Vec<u64> {
-    let creator_assets_key = DataKey::CreatorSyntheticAssets(creator.clone());
+    let creator_assets_key = DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
     env.storage()
         .persistent()
         .get(&creator_assets_key)
@@ -65,7 +65,7 @@ pub fn get_creator_synthetic_assets(env: &Env, creator: &Address) -> Vec<u64> {
 /// # Requirements
 /// - Validates: Requirements 9.8
 pub fn get_holder_balance(env: &Env, asset_id: u64, holder: &Address) -> i128 {
-    let balance_key = DataKey::SyntheticBalance(holder.clone(), asset_id);
+    let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(holder.clone(), asset_id));
     env.storage()
         .persistent()
         .get(&balance_key)

@@ -1,8 +1,7 @@
 use soroban_sdk::{symbol_short, token, Address, Env};
 
 use crate::bridge::{validator, BridgeDataKey, BridgeTip};
-use crate::DataKey;
-use crate::TipJarError;
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, BridgeKey, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 
 /// Processes a bridged tip submitted by an authorised relayer.
 ///
@@ -27,25 +26,25 @@ pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Resu
         .storage()
         .instance()
         .get(&BridgeDataKey::BridgeRelayer)
-        .ok_or(TipJarError::Unauthorized)?;
+        .ok_or(CoreError::Unauthorized)?;
     if *relayer != stored_relayer {
-        return Err(TipJarError::Unauthorized);
+        return Err(CoreError::Unauthorized);
     }
 
     // 3. Validate amount and replay guard.
     validator::validate_bridge_tip(env, &tip.source_chain, &tip.source_tx_hash, tip.amount)
-        .map_err(|_| TipJarError::InvalidAmount)?;
+        .map_err(|_| CoreError::InvalidAmount)?;
 
     // 4. Validate chain is supported.
     validator::validate_chain_supported(env, &tip.source_chain)
-        .map_err(|_| TipJarError::InvalidAmount)?;
+        .map_err(|_| CoreError::InvalidAmount)?;
 
     // 5. Resolve bridge token.
     let token_address: Address = env
         .storage()
         .instance()
         .get(&BridgeDataKey::BridgeToken)
-        .ok_or(TipJarError::TokenNotWhitelisted)?;
+        .ok_or(CoreError::TokenNotWhitelisted)?;
 
     // 6. Calculate bridge fee.
     let (fee, net_amount) = validator::calculate_bridge_fee(env, tip.amount);
@@ -68,7 +67,7 @@ pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Resu
 
     // 9. Accumulate bridge fees if any.
     if fee > 0 {
-        let fee_key = DataKey::PlatformFeeBalance(token_address.clone());
+        let fee_key = DataKey::Bridge(BridgeKey::PlatformFeeBalance(token_address.clone()));
         let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
         env.storage().instance().set(&fee_key, &(current_fee + fee));
     }

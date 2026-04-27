@@ -4,7 +4,7 @@
 //! performance metrics.
 
 use soroban_sdk::Env;
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 use super::types::SyntheticAsset;
 use super::events::emit_price_updated;
 
@@ -26,12 +26,12 @@ use super::events::emit_price_updated;
 /// - Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 pub fn update_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::(Key::());
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Get the tip pool balance for the creator and backing token
     let balance_key = DataKey::CreatorBalance(asset.creator.clone(), asset.backing_token.clone());
@@ -84,13 +84,18 @@ pub fn update_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError
 /// - Validates: Requirements 4.1, 9.3
 pub fn get_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::(Key::());
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Return the current oracle price
     Ok(asset.oracle_price)
 }
+
+
+
+
+

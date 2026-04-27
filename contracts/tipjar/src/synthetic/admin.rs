@@ -4,7 +4,7 @@
 //! pause, resume, and parameter adjustments.
 
 use soroban_sdk::{token, Address, Env, Vec};
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, SyntheticKey};
 use super::types::SyntheticAsset;
 use super::events::{
     emit_synthetic_asset_created, emit_synthetic_asset_paused, emit_synthetic_asset_resumed,
@@ -33,7 +33,7 @@ pub fn create_synthetic_asset(
 ) -> Result<u64, TipJarError> {
     // Verify collateralization ratio is between 10000 and 50000 bps (100%-500%)
     if collateralization_ratio < 10000 || collateralization_ratio > 50000 {
-        return Err(TipJarError::InvalidCollateralizationRatio);
+        return Err(CreditError::InvalidCollateralizationRatio);
     }
 
     // Verify backing token exists in creator's tip pool
@@ -45,17 +45,17 @@ pub fn create_synthetic_asset(
         .unwrap_or(0);
 
     if tip_pool_balance == 0 {
-        return Err(TipJarError::TokenNotInPool);
+        return Err(CreditError::TokenNotInPool);
     }
 
     // Verify creator has sufficient tip pool balance (at least some minimum)
     // For now, we just check that balance > 0, but in practice might want a minimum threshold
     if tip_pool_balance <= 0 {
-        return Err(TipJarError::InsufficientCollateral);
+        return Err(CreditError::InsufficientCollateral);
     }
 
     // Generate unique asset_id using SyntheticAssetCounter
-    let counter_key = DataKey::SyntheticAssetCounter;
+    let counter_key = DataKey::Synthetic(SyntheticKey::SyntheticAssetCounter);
     let current_counter: u64 = env
         .storage()
         .instance()
@@ -79,11 +79,11 @@ pub fn create_synthetic_asset(
     };
 
     // Store asset record in persistent storage
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     env.storage().persistent().set(&asset_key, &asset);
 
     // Add asset_id to creator's asset list
-    let creator_assets_key = DataKey::CreatorSyntheticAssets(creator.clone());
+    let creator_assets_key = DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
     let mut creator_assets: Vec<u64> = env
         .storage()
         .persistent()
@@ -119,16 +119,16 @@ pub fn pause_synthetic_asset(
     asset_id: u64,
 ) -> Result<(), TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Verify caller is asset creator
     if asset.creator != *creator {
-        return Err(TipJarError::Unauthorized);
+        return Err(CoreError::Unauthorized);
     }
 
     // Set active status to false
@@ -156,22 +156,22 @@ pub fn resume_synthetic_asset(
     asset_id: u64,
 ) -> Result<(), TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Verify caller is asset creator
     if asset.creator != *creator {
-        return Err(TipJarError::Unauthorized);
+        return Err(CoreError::Unauthorized);
     }
 
     // Verify collateralization requirements are met
     let current_ratio = get_collateralization_ratio(env, asset_id)?;
     if current_ratio < asset.collateralization_ratio {
-        return Err(TipJarError::CollateralizationViolation);
+        return Err(CreditError::CollateralizationViolation);
     }
 
     // Set active status to true
@@ -202,20 +202,20 @@ pub fn update_collateralization_ratio(
 ) -> Result<(), TipJarError> {
     // Verify new ratio is between 10000 and 50000 bps
     if new_ratio < 10000 || new_ratio > 50000 {
-        return Err(TipJarError::InvalidCollateralizationRatio);
+        return Err(CreditError::InvalidCollateralizationRatio);
     }
 
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Verify caller is asset creator
     if asset.creator != *creator {
-        return Err(TipJarError::Unauthorized);
+        return Err(CoreError::Unauthorized);
     }
 
     // Update collateralization_ratio field
@@ -246,20 +246,20 @@ pub fn add_collateral(
 ) -> Result<(), TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
-        return Err(TipJarError::InvalidAmount);
+        return Err(CoreError::InvalidAmount);
     }
 
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Verify caller is asset creator
     if asset.creator != *creator {
-        return Err(TipJarError::Unauthorized);
+        return Err(CoreError::Unauthorized);
     }
 
     // Transfer collateral from creator to tip pool (this is essentially adding to their own pool)
@@ -276,10 +276,10 @@ pub fn add_collateral(
         .unwrap_or(0);
     let new_balance = current_balance
         .checked_add(amount)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     env.storage().persistent().set(&creator_balance_key, &new_balance);
 
-    // Update total_collateral via update_collateral()
+    // Update total collateral via update_collateral()
     update_collateral(env, asset_id, amount)?;
 
     Ok(())

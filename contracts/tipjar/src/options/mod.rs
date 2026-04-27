@@ -138,7 +138,7 @@ pub fn init_options(env: &Env) {
     
     env.storage()
         .instance()
-        .set(&DataKey::OptionCounter, &0u64);
+        .set(&DataKey::Option(OptionKey::OptionCounter), &0u64);
 }
 
 /// Get pricing parameters
@@ -317,3 +317,4 @@ pub fn update_locked_collateral(env: &Env, address: &Address, token: &Address, a
         .persistent()
         .set(&DataKey::Collateral(address.clone(), token.clone()), &amount);
 }
+

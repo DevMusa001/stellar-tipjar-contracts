@@ -5,7 +5,7 @@
 //! collateralization ratios.
 
 use soroban_sdk::{token, Address, Env};
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 use super::types::SyntheticAsset;
 use super::events::emit_synthetic_tokens_minted;
 use super::oracle::get_oracle_price;
@@ -33,16 +33,16 @@ pub fn calculate_required_collateral(
 ) -> Result<i128, TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
-        return Err(TipJarError::InvalidAmount);
+        return Err(CoreError::InvalidAmount);
     }
 
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Get current oracle price
     let oracle_price = get_oracle_price(env, asset_id)?;
@@ -50,11 +50,11 @@ pub fn calculate_required_collateral(
     // Calculate required collateral: (amount * oracle_price * collateralization_ratio) / 10000
     let collateral = amount
         .checked_mul(oracle_price)
-        .ok_or(TipJarError::InvalidAmount)?
+        .ok_or(CoreError::InvalidAmount)?
         .checked_mul(asset.collateralization_ratio as i128)
-        .ok_or(TipJarError::InvalidAmount)?
+        .ok_or(CoreError::InvalidAmount)?
         .checked_div(10000)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
 
     Ok(collateral)
 }
@@ -80,19 +80,19 @@ pub fn mint(
 ) -> Result<i128, TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
-        return Err(TipJarError::InvalidAmount);
+        return Err(CoreError::InvalidAmount);
     }
 
     // Verify synthetic asset exists and is active
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     if !asset.active {
-        return Err(TipJarError::SyntheticAssetInactive);
+        return Err(CreditError::SyntheticAssetInactive);
     }
 
     // Calculate required collateral
@@ -106,7 +106,7 @@ pub fn mint(
     token_contract.transfer(user, &asset.creator, &required_collateral);
 
     // Lock collateral in tip pool (update SyntheticCollateral storage)
-    let collateral_key = DataKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone());
+    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone()));
     let current_locked: i128 = env
         .storage()
         .persistent()
@@ -114,11 +114,11 @@ pub fn mint(
         .unwrap_or(0);
     let new_locked = current_locked
         .checked_add(required_collateral)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     env.storage().persistent().set(&collateral_key, &new_locked);
 
     // Mint synthetic tokens to user (update SyntheticBalance storage)
-    let balance_key = DataKey::SyntheticBalance(user.clone(), asset_id);
+    let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(user.clone(), asset_id));
     let current_balance: i128 = env
         .storage()
         .persistent()
@@ -126,7 +126,7 @@ pub fn mint(
         .unwrap_or(0);
     let new_balance = current_balance
         .checked_add(amount)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     env.storage().persistent().set(&balance_key, &new_balance);
 
     // Update total supply

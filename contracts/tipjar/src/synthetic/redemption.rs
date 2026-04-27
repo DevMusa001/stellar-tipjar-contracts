@@ -4,7 +4,7 @@
 //! value back to token holders.
 
 use soroban_sdk::{token, Address, Env};
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 use super::types::SyntheticAsset;
 use super::events::emit_synthetic_tokens_redeemed;
 use super::oracle::get_oracle_price;
@@ -32,7 +32,7 @@ pub fn calculate_redemption_value(
 ) -> Result<i128, TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
-        return Err(TipJarError::InvalidAmount);
+        return Err(CoreError::InvalidAmount);
     }
 
     // Get current oracle price
@@ -41,7 +41,7 @@ pub fn calculate_redemption_value(
     // Calculate redemption value: amount * oracle_price
     let redemption_value = amount
         .checked_mul(oracle_price)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
 
     Ok(redemption_value)
 }
@@ -67,19 +67,19 @@ pub fn redeem(
 ) -> Result<i128, TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
-        return Err(TipJarError::InvalidAmount);
+        return Err(CoreError::InvalidAmount);
     }
 
     // Retrieve the synthetic asset
-    let asset_key = DataKey::SyntheticAsset(asset_id);
+    let asset_key = DataKey::Synthetic(SyntheticKey::SyntheticAsset(asset_id));
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
         .get(&asset_key)
-        .ok_or(TipJarError::SyntheticAssetNotFound)?;
+        .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Verify holder owns sufficient synthetic tokens
-    let balance_key = DataKey::SyntheticBalance(holder.clone(), asset_id);
+    let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(holder.clone(), asset_id));
     let current_balance: i128 = env
         .storage()
         .persistent()
@@ -87,7 +87,7 @@ pub fn redeem(
         .unwrap_or(0);
 
     if current_balance < amount {
-        return Err(TipJarError::InsufficientBalance);
+        return Err(CoreError::InsufficientBalance);
     }
 
     // Calculate redemption value
@@ -102,13 +102,13 @@ pub fn redeem(
         .unwrap_or(0);
 
     if tip_pool_balance < redemption_value {
-        return Err(TipJarError::InsufficientPoolBalance);
+        return Err(CreditError::InsufficientPoolBalance);
     }
 
     // Burn synthetic tokens from holder (update SyntheticBalance storage)
     let new_balance = current_balance
         .checked_sub(amount)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     
     if new_balance == 0 {
         env.storage().persistent().remove(&balance_key);
@@ -120,7 +120,7 @@ pub fn redeem(
     update_supply(env, asset_id, -amount)?;
 
     // Unlock collateral from tip pool (update SyntheticCollateral storage)
-    let collateral_key = DataKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone());
+    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone()));
     let current_locked: i128 = env
         .storage()
         .persistent()
@@ -128,7 +128,7 @@ pub fn redeem(
         .unwrap_or(0);
     let new_locked = current_locked
         .checked_sub(redemption_value)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     
     if new_locked == 0 {
         env.storage().persistent().remove(&collateral_key);
@@ -143,7 +143,7 @@ pub fn redeem(
     // Update creator's tip pool balance
     let new_tip_pool_balance = tip_pool_balance
         .checked_sub(redemption_value)
-        .ok_or(TipJarError::InvalidAmount)?;
+        .ok_or(CoreError::InvalidAmount)?;
     
     if new_tip_pool_balance == 0 {
         env.storage().persistent().remove(&creator_balance_key);

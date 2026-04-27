@@ -1,141 +1,243 @@
-//! Automated Market Maker for Tip Tokens
+//! Automated Market Maker (AMM) for Tip Token Swaps
 //!
-//! This module provides token swap and liquidity pool functionality.
+//! Implements a constant-product AMM (x·y = k) with:
+//! - Permissionless liquidity pool creation per token pair
+//! - Proportional LP share minting / burning
+//! - Swap with configurable fee and slippage protection
+//! - Accumulated fee rewards claimable by LPs
+//!
+//! # Storage layout (all keys in top-level `DataKey`)
+//! - `AmmPool(pool_id)`                  — pool state
+//! - `AmmPoolCounter`                    — global pool ID counter
+//! - `AmmPoolByTokens(token_a, token_b)` — pool ID lookup by pair
+//! - `AmmLpShares(pool_id, provider)`    — LP share balance
+//! - `AmmLpRewards(pool_id, provider)`   — unclaimed fee rewards per provider
+//! - `AmmPoolFeeAccum(pool_id)`          — cumulative fees per share (× PRECISION)
+//! - `AmmProviderDebt(pool_id, provider)`— fee-per-share snapshot at last claim
 
 pub mod pool;
-pub mod swap;
 pub mod pricing;
+pub mod swap;
 
 use soroban_sdk::{contracttype, Address, Env};
 
-/// Liquidity pool structure
+use crate::DataKey;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/// Default swap fee: 0.3 % (30 bps).
+pub const DEFAULT_FEE_BPS: u32 = 30;
+
+/// Maximum allowed fee: 10 % (1 000 bps).
+pub const MAX_FEE_BPS: u32 = 1_000;
+
+/// Minimum initial liquidity for each token when creating a pool.
+pub const MIN_INITIAL_LIQUIDITY: i128 = 1_000;
+
+/// Fixed-point precision for fee accumulator (1 000 000 = 1.0).
+pub const PRECISION: i128 = 1_000_000;
+
+// ── Data types ───────────────────────────────────────────────────────────────
+
+/// State of a liquidity pool.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiquidityPool {
-    pub token_a: Address,
-    pub token_b: Address,
-    pub reserve_a: i128,
-    pub reserve_b: i128,
-    pub total_shares: i128,
-    pub fee_bps: u32, // Fee in basis points (e.g., 30 = 0.3%)
-}
-
-/// Liquidity provider share
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LiquidityShare {
-    pub provider: Address,
-    pub shares: i128,
+    /// Unique pool ID.
     pub pool_id: u64,
+    /// First token in the pair (canonical order: lower address first).
+    pub token_a: Address,
+    /// Second token in the pair.
+    pub token_b: Address,
+    /// Reserve of token A held by the pool.
+    pub reserve_a: i128,
+    /// Reserve of token B held by the pool.
+    pub reserve_b: i128,
+    /// Total LP shares outstanding.
+    pub total_shares: i128,
+    /// Swap fee in basis points.
+    pub fee_bps: u32,
+    /// Cumulative fee-per-share accumulator × PRECISION (token A equivalent).
+    pub fee_per_share_accum: i128,
+    /// Total fees collected (token A equivalent) since pool creation.
+    pub total_fees_collected: i128,
 }
 
-/// Swap result
+/// Result returned from a swap operation.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwapResult {
+    /// Amount of output token received.
     pub amount_out: i128,
+    /// Fee charged on the input amount.
     pub fee_amount: i128,
+    /// Pool reserve of token A after the swap.
     pub new_reserve_a: i128,
+    /// Pool reserve of token B after the swap.
     pub new_reserve_b: i128,
+    /// Price impact in basis points.
+    pub price_impact_bps: i128,
 }
 
-/// Pool creation parameters
+/// Result returned from adding liquidity.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PoolParams {
-    pub token_a: Address,
-    pub token_b: Address,
-    pub initial_liquidity_a: i128,
-    pub initial_liquidity_b: i128,
-    pub fee_bps: u32,
+pub struct AddLiquidityResult {
+    /// LP shares minted.
+    pub shares_minted: i128,
+    /// Actual amount of token A deposited.
+    pub amount_a: i128,
+    /// Actual amount of token B deposited.
+    pub amount_b: i128,
 }
 
-/// Default fee: 0.3% (30 basis points)
-pub const DEFAULT_FEE_BPS: u32 = 30;
-
-/// Storage keys for AMM
+/// Result returned from removing liquidity.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataKey {
-    Pool(u64),
-    PoolCounter,
-    PoolByTokens(Address, Address),
-    LiquidityShare(u64, Address),
-    UserShares(u64),
+pub struct RemoveLiquidityResult {
+    /// Amount of token A returned.
+    pub amount_a: i128,
+    /// Amount of token B returned.
+    pub amount_b: i128,
+    /// Fee rewards claimed at the same time.
+    pub rewards_claimed: i128,
 }
 
-/// Create a new liquidity pool
-pub fn create_pool(
-    env: &Env,
-    token_a: &Address,
-    token_b: &Address,
-    fee_bps: Option<u32>,
-) -> u64 {
-    // Check if pool already exists
-    let pool_id = get_pool_id(env, token_a, token_b);
-    if pool_id.is_some() {
-        panic!("Pool already exists for this token pair");
-    }
+// ── Storage helpers ──────────────────────────────────────────────────────────
 
-    let counter_key = DataKey::PoolCounter;
-    let next_id: u64 = env.storage().persistent().get(&counter_key).unwrap_or(0);
-    let new_id = next_id + 1;
-
-    let pool = LiquidityPool {
-        token_a: token_a.clone(),
-        token_b: token_b.clone(),
-        reserve_a: 0,
-        reserve_b: 0,
-        total_shares: 0,
-        fee_bps: fee_bps.unwrap_or(DEFAULT_FEE_BPS),
-    };
-
-    env.storage().persistent().set(&DataKey::Pool(new_id), &pool);
-    env.storage().persistent().set(&counter_key, &new_id);
-
-    // Store pool ID for token pair lookup
-    let pair_key = DataKey::PoolByTokens(token_a.clone(), token_b.clone());
-    env.storage().persistent().set(&pair_key, &new_id);
-
-    // Also store reverse pair
-    let reverse_pair_key = DataKey::PoolByTokens(token_b.clone(), token_a.clone());
-    env.storage().persistent().set(&reverse_pair_key, &new_id);
-
-    new_id
-}
-
-/// Get pool ID for token pair
-pub fn get_pool_id(env: &Env, token_a: &Address, token_b: &Address) -> Option<u64> {
-    let pair_key = DataKey::PoolByTokens(token_a.clone(), token_b.clone());
-    env.storage().persistent().get(&pair_key)
-}
-
-/// Get pool by ID
 pub fn get_pool(env: &Env, pool_id: u64) -> Option<LiquidityPool> {
-    let pool_key = DataKey::Pool(pool_id);
-    env.storage().persistent().get(&pool_key)
+    env.storage().persistent().get(&DataKey::AmmPool(pool_id))
 }
 
-/// Get pool by token pair
-pub fn get_pool_by_tokens(env: &Env, token_a: &Address, token_b: &Address) -> Option<LiquidityPool> {
-    let pool_id = get_pool_id(env, token_a, token_b)?;
-    get_pool(env, pool_id)
+pub fn save_pool(env: &Env, pool: &LiquidityPool) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AmmPool(pool.pool_id), pool);
 }
 
-/// Update pool state
-pub fn update_pool(env: &Env, pool_id: u64, pool: &LiquidityPool) {
-    let pool_key = DataKey::Pool(pool_id);
-    env.storage().persistent().set(&pool_key, pool);
+pub fn get_pool_counter(env: &Env) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AmmPoolCounter)
+        .unwrap_or(0u64)
 }
 
-/// Get user's liquidity shares
-pub fn get_user_shares(env: &Env, pool_id: u64, user: &Address) -> i128 {
-    let share_key = DataKey::LiquidityShare(pool_id, user.clone());
-    env.storage().persistent().get(&share_key).unwrap_or(0)
+pub fn next_pool_id(env: &Env) -> u64 {
+    let id = get_pool_counter(env) + 1;
+    env.storage()
+        .persistent()
+        .set(&DataKey::AmmPoolCounter, &id);
+    id
 }
 
-/// Update user's liquidity shares
-pub fn update_user_shares(env: &Env, pool_id: u64, user: &Address, shares: i128) {
-    let share_key = DataKey::LiquidityShare(pool_id, user.clone());
-    env.storage().persistent().set(&share_key, &shares);
+pub fn get_pool_id_by_tokens(env: &Env, token_a: &Address, token_b: &Address) -> Option<u64> {
+    // Try canonical order first, then reverse
+    env.storage()
+        .persistent()
+        .get(&DataKey::AmmPoolByTokens(token_a.clone(), token_b.clone()))
+        .or_else(|| {
+            env.storage()
+                .persistent()
+                .get(&DataKey::AmmPoolByTokens(token_b.clone(), token_a.clone()))
+        })
+}
+
+pub fn register_pool_tokens(env: &Env, pool_id: u64, token_a: &Address, token_b: &Address) {
+    env.storage().persistent().set(
+        &DataKey::AmmPoolByTokens(token_a.clone(), token_b.clone()),
+        &pool_id,
+    );
+}
+
+pub fn get_lp_shares(env: &Env, pool_id: u64, provider: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AmmLpShares(pool_id, provider.clone()))
+        .unwrap_or(0i128)
+}
+
+pub fn set_lp_shares(env: &Env, pool_id: u64, provider: &Address, shares: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AmmLpShares(pool_id, provider.clone()), &shares);
+}
+
+/// Cumulative fee-per-share at the time the provider last claimed.
+pub fn get_provider_debt(env: &Env, pool_id: u64, provider: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AmmProviderDebt(pool_id, provider.clone()))
+        .unwrap_or(0i128)
+}
+
+pub fn set_provider_debt(env: &Env, pool_id: u64, provider: &Address, debt: i128) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::AmmProviderDebt(pool_id, provider.clone()), &debt);
+}
+
+// ── Fee reward helpers ───────────────────────────────────────────────────────
+
+/// Compute pending fee rewards for a provider.
+///
+/// `pending = shares × (pool.fee_per_share_accum - provider_debt) / PRECISION`
+pub fn pending_rewards(env: &Env, pool_id: u64, provider: &Address) -> i128 {
+    let pool = match get_pool(env, pool_id) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let shares = get_lp_shares(env, pool_id, provider);
+    if shares == 0 {
+        return 0;
+    }
+    let debt = get_provider_debt(env, pool_id, provider);
+    let delta = pool.fee_per_share_accum - debt;
+    if delta <= 0 {
+        return 0;
+    }
+    shares * delta / PRECISION
+}
+
+/// Settle pending rewards for a provider and reset their debt snapshot.
+/// Returns the amount of rewards settled.
+pub fn settle_rewards(env: &Env, pool_id: u64, provider: &Address) -> i128 {
+    let pool = match get_pool(env, pool_id) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let shares = get_lp_shares(env, pool_id, provider);
+    let debt = get_provider_debt(env, pool_id, provider);
+    let delta = pool.fee_per_share_accum - debt;
+    let reward = if shares > 0 && delta > 0 {
+        shares * delta / PRECISION
+    } else {
+        0
+    };
+    // Sync debt to current accumulator
+    set_provider_debt(env, pool_id, provider, pool.fee_per_share_accum);
+    reward
+}
+
+/// Accrue a fee amount into the pool's fee-per-share accumulator.
+pub fn accrue_fee(env: &Env, pool: &mut LiquidityPool, fee_amount: i128) {
+    if pool.total_shares > 0 && fee_amount > 0 {
+        pool.fee_per_share_accum += fee_amount * PRECISION / pool.total_shares;
+        pool.total_fees_collected += fee_amount;
+    }
+}
+
+// ── Integer square root ──────────────────────────────────────────────────────
+
+/// Floor integer square root via Newton's method.
+pub fn isqrt(n: i128) -> i128 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
 }

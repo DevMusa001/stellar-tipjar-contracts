@@ -47,6 +47,15 @@ pub mod privacy_tip;
 // Options trading
 pub mod options;
 
+// Prediction markets
+pub mod prediction_market;
+
+// Tip futures contracts
+pub mod futures;
+
+// Tip Volatility Index
+pub mod volatility;
+
 // Tip Index Funds
 pub mod index_fund;
 
@@ -755,6 +764,56 @@ pub enum DataKey {
     TwapObservation(u64, u32),
     /// Global TWAP oracle ID counter.
     TwapOracleCounter,
+    /// Prediction market record by ID.
+    PredMarket(u64),
+    /// Global prediction market counter.
+    PredMarketCounter,
+    /// Bettor position keyed by (market_id, bettor).
+    PredBettorPosition(u64, Address),
+    /// List of market IDs a bettor has participated in.
+    PredBettorMarkets(Address),
+    /// List of market IDs for a creator.
+    PredCreatorMarkets(Address),
+    /// List of all open prediction market IDs.
+    PredActiveMarkets,
+    /// Platform fee for prediction markets in basis points.
+    PredMarketFeeBps,
+    /// Futures contract record by ID.
+    FuturesContract(u64),
+    /// Global futures contract counter.
+    FuturesCounter,
+    /// Aggregated position for a trader.
+    FuturesPosition(Address),
+    /// List of contract IDs for a trader.
+    FuturesTraderContracts(Address),
+    /// List of all active futures contract IDs.
+    FuturesActiveContracts,
+    /// Global futures configuration (margins, penalties).
+    FuturesConfig,
+    /// Volatility index state by ID.
+    VolIndex(u64),
+    /// Global volatility index counter.
+    VolCounter,
+    /// Ring-buffer observation slot keyed by (index_id, slot).
+    VolObservation(u64, u32),
+    /// Volatility snapshot keyed by (index_id, seq).
+    VolSnapshot(u64, u64),
+    /// Total snapshot count for an index.
+    VolSnapshotCount(u64),
+    /// List of index IDs for a creator.
+    VolCreatorIndices(Address),
+    /// Global volatility module configuration.
+    VolConfig,
+    /// AMM liquidity pool state by pool ID.
+    AmmPool(u64),
+    /// Global AMM pool counter.
+    AmmPoolCounter,
+    /// AMM pool ID lookup by token pair.
+    AmmPoolByTokens(Address, Address),
+    /// LP share balance keyed by (pool_id, provider).
+    AmmLpShares(u64, Address),
+    /// Fee-per-share debt snapshot keyed by (pool_id, provider).
+    AmmProviderDebt(u64, Address),
 }
 
 #[contracterror]
@@ -959,6 +1018,70 @@ pub enum TipJarError {
     TwapInvalidParams = 109,
     /// TWAP price value is invalid (must be > 0).
     TwapInvalidPrice = 110,
+    /// Prediction market not found.
+    PredMarketNotFound = 111,
+    /// Prediction market is not open for betting.
+    PredMarketNotOpen = 112,
+    /// Betting window for this market has closed.
+    PredMarketClosed = 113,
+    /// Prediction market has already been resolved or cancelled.
+    PredMarketAlreadySettled = 114,
+    /// Caller is not the designated market resolver.
+    PredMarketNotResolver = 115,
+    /// Bet amount is below the minimum allowed.
+    PredBetTooSmall = 116,
+    /// Bettor has no position in this market.
+    PredNoPosition = 117,
+    /// Winnings for this market have already been claimed.
+    PredAlreadyClaimed = 118,
+    /// Market is not yet resolved or cancelled; cannot claim.
+    PredMarketNotSettled = 119,
+    /// Futures contract not found.
+    FuturesNotFound = 120,
+    /// Futures contract is not in an active state.
+    FuturesNotActive = 121,
+    /// Futures contract has already been matched by a short party.
+    FuturesAlreadyMatched = 122,
+    /// Caller is not a party to this futures contract.
+    FuturesUnauthorized = 123,
+    /// Settlement date has not been reached yet.
+    FuturesNotDue = 124,
+    /// Contract size is below the minimum allowed.
+    FuturesSizeTooSmall = 125,
+    /// Contract price must be greater than zero.
+    FuturesInvalidPrice = 126,
+    /// Position is not under-margined; liquidation not allowed.
+    FuturesPositionHealthy = 127,
+    /// Contract is not matched; cannot settle.
+    FuturesNotMatched = 128,
+    /// Futures contract has already been settled or liquidated.
+    FuturesAlreadyClosed = 129,
+    /// Volatility index not found.
+    VolIndexNotFound = 130,
+    /// Volatility index is not active.
+    VolIndexNotActive = 131,
+    /// Observation is too frequent (below min interval).
+    VolObsTooFrequent = 132,
+    /// Window size is outside the allowed range.
+    VolInvalidWindow = 133,
+    /// Caller is not the index creator.
+    VolUnauthorized = 134,
+    /// AMM pool not found.
+    AmmPoolNotFound = 135,
+    /// AMM pool already exists for this token pair.
+    AmmPoolExists = 136,
+    /// Both tokens in a pool must be different.
+    AmmIdenticalTokens = 137,
+    /// Token is not part of this pool.
+    AmmTokenNotInPool = 138,
+    /// Swap or withdrawal would exceed slippage tolerance.
+    AmmSlippageExceeded = 139,
+    /// Pool fee exceeds the maximum allowed (10 %).
+    AmmFeeTooHigh = 140,
+    /// Insufficient liquidity in the pool for this operation.
+    AmmInsufficientLiquidity = 141,
+    /// Provider has insufficient LP shares.
+    AmmInsufficientShares = 142,
 }
 
 #[contract]
@@ -6507,5 +6630,1056 @@ a
         fund_id: u64,
     ) -> Vec<(Address, i128)> {
         index_fund::rebalance::get_allocations(&env, fund_id)
+    }
+
+    // ── prediction markets ───────────────────────────────────────────────────
+
+    /// Set the platform fee for prediction markets. Admin only.
+    ///
+    /// `fee_bps` must be ≤ 1000 (10 %). Emits `("pm_fee",)`.
+    pub fn set_pred_market_fee(env: Env, admin: Address, fee_bps: u32) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if fee_bps > 1000 {
+            panic_with_error!(&env, TipJarError::FeeExceedsMaximum);
+        }
+        prediction_market::set_fee_bps(&env, fee_bps);
+        env.events().publish((symbol_short!("pm_fee"),), fee_bps);
+    }
+
+    /// Create a new prediction market for a creator success metric.
+    ///
+    /// - `creator`    – the creator whose metric is being predicted.
+    /// - `resolver`   – address authorised to settle the market.
+    /// - `question`   – human-readable description of the prediction.
+    /// - `token`      – token used for betting.
+    /// - `closes_at`  – unix timestamp after which no new bets are accepted.
+    /// - `resolves_at`– unix timestamp by which the resolver must settle.
+    ///
+    /// Returns the new market ID. Emits `("pm_create",)`.
+    pub fn create_pred_market(
+        env: Env,
+        creator: Address,
+        resolver: Address,
+        question: String,
+        token: Address,
+        closes_at: u64,
+        resolves_at: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let now = env.ledger().timestamp();
+        if closes_at <= now {
+            panic_with_error!(&env, TipJarError::InvalidUnlockTime);
+        }
+        if resolves_at < closes_at {
+            panic_with_error!(&env, TipJarError::InvalidUnlockTime);
+        }
+        if !env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let market_id = prediction_market::create_market(
+            &env,
+            &creator,
+            &resolver,
+            question.clone(),
+            &token,
+            closes_at,
+            resolves_at,
+        );
+
+        env.events().publish(
+            (symbol_short!("pm_create"),),
+            (market_id, creator, resolver, token, closes_at, resolves_at),
+        );
+
+        market_id
+    }
+
+    /// Place a bet on a prediction market outcome.
+    ///
+    /// Transfers `amount` tokens from `bettor` to the contract.
+    /// Emits `("pm_bet",)`.
+    pub fn place_pred_bet(
+        env: Env,
+        bettor: Address,
+        market_id: u64,
+        outcome: prediction_market::Outcome,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        bettor.require_auth();
+
+        if amount < prediction_market::MIN_BET_AMOUNT {
+            panic_with_error!(&env, TipJarError::PredBetTooSmall);
+        }
+
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+
+        if market.status != prediction_market::MarketStatus::Open {
+            panic_with_error!(&env, TipJarError::PredMarketNotOpen);
+        }
+        if env.ledger().timestamp() >= market.closes_at {
+            panic_with_error!(&env, TipJarError::PredMarketClosed);
+        }
+
+        prediction_market::place_bet(&env, &bettor, market_id, outcome, amount);
+
+        env.events().publish(
+            (symbol_short!("pm_bet"),),
+            (market_id, bettor, outcome, amount),
+        );
+    }
+
+    /// Close the betting window of a prediction market.
+    ///
+    /// Can be called by the resolver at any time, or by anyone once `closes_at` has passed.
+    /// Emits `("pm_close",)`.
+    pub fn close_pred_market(env: Env, caller: Address, market_id: u64) {
+        caller.require_auth();
+
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+
+        if market.status != prediction_market::MarketStatus::Open {
+            panic_with_error!(&env, TipJarError::PredMarketNotOpen);
+        }
+
+        prediction_market::close_market(&env, &caller, market_id);
+
+        env.events().publish((symbol_short!("pm_close"),), market_id);
+    }
+
+    /// Resolve a prediction market with the winning outcome.
+    ///
+    /// Only the designated resolver may call this. Emits `("pm_resolve",)`.
+    pub fn resolve_pred_market(
+        env: Env,
+        resolver: Address,
+        market_id: u64,
+        winning_outcome: prediction_market::Outcome,
+    ) {
+        resolver.require_auth();
+
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+
+        if market.status == prediction_market::MarketStatus::Resolved
+            || market.status == prediction_market::MarketStatus::Cancelled
+        {
+            panic_with_error!(&env, TipJarError::PredMarketAlreadySettled);
+        }
+        if resolver != market.resolver {
+            panic_with_error!(&env, TipJarError::PredMarketNotResolver);
+        }
+
+        prediction_market::resolve_market(&env, &resolver, market_id, winning_outcome);
+
+        env.events().publish(
+            (symbol_short!("pm_res"),),
+            (market_id, winning_outcome),
+        );
+    }
+
+    /// Cancel a prediction market and enable full refunds.
+    ///
+    /// Callable by the resolver or the contract admin. Emits `("pm_cancel",)`.
+    pub fn cancel_pred_market(env: Env, caller: Address, market_id: u64) {
+        caller.require_auth();
+
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+
+        if market.status == prediction_market::MarketStatus::Resolved
+            || market.status == prediction_market::MarketStatus::Cancelled
+        {
+            panic_with_error!(&env, TipJarError::PredMarketAlreadySettled);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        prediction_market::cancel_market(&env, &caller, market_id, &admin);
+
+        env.events().publish((symbol_short!("pm_cancel"),), market_id);
+    }
+
+    /// Claim winnings (or a refund for a cancelled market).
+    ///
+    /// Returns the payout amount. Emits `("pm_claim",)`.
+    pub fn claim_pred_winnings(env: Env, bettor: Address, market_id: u64) -> i128 {
+        bettor.require_auth();
+
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+
+        if market.status != prediction_market::MarketStatus::Resolved
+            && market.status != prediction_market::MarketStatus::Cancelled
+        {
+            panic_with_error!(&env, TipJarError::PredMarketNotSettled);
+        }
+
+        let position = prediction_market::get_bettor_position(&env, market_id, &bettor);
+        if position.yes_amount == 0 && position.no_amount == 0 {
+            panic_with_error!(&env, TipJarError::PredNoPosition);
+        }
+        if position.settled {
+            panic_with_error!(&env, TipJarError::PredAlreadyClaimed);
+        }
+
+        let payout = prediction_market::claim_winnings(&env, &bettor, market_id);
+
+        env.events().publish(
+            (symbol_short!("pm_claim"),),
+            (market_id, bettor, payout),
+        );
+
+        payout
+    }
+
+    // ── prediction market queries ────────────────────────────────────────────
+
+    /// Get a prediction market by ID.
+    pub fn get_pred_market(
+        env: Env,
+        market_id: u64,
+    ) -> Option<prediction_market::PredictionMarket> {
+        prediction_market::get_market(&env, market_id)
+    }
+
+    /// Get the current odds for a market as `(yes_probability, no_probability)`
+    /// both scaled by `ODDS_PRECISION` (1_000_000 = 100 %).
+    pub fn get_pred_market_odds(env: Env, market_id: u64) -> (i128, i128) {
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+        prediction_market::odds::market_odds(&market)
+    }
+
+    /// Get the payout multiplier for a specific outcome, scaled by `ODDS_PRECISION`.
+    pub fn get_pred_market_multiplier(
+        env: Env,
+        market_id: u64,
+        outcome: prediction_market::Outcome,
+    ) -> i128 {
+        let market = prediction_market::get_market(&env, market_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PredMarketNotFound));
+        prediction_market::odds::payout_multiplier(&market, outcome)
+    }
+
+    /// Get a bettor's position in a market.
+    pub fn get_pred_bettor_position(
+        env: Env,
+        market_id: u64,
+        bettor: Address,
+    ) -> prediction_market::BettorPosition {
+        prediction_market::get_bettor_position(&env, market_id, &bettor)
+    }
+
+    /// Get all market IDs for a creator.
+    pub fn get_creator_pred_markets(env: Env, creator: Address) -> Vec<u64> {
+        prediction_market::get_creator_markets(&env, &creator)
+    }
+
+    /// Get all market IDs a bettor has participated in.
+    pub fn get_bettor_pred_markets(env: Env, bettor: Address) -> Vec<u64> {
+        prediction_market::get_bettor_markets(&env, &bettor)
+    }
+
+    /// Get all currently active (open) market IDs.
+    pub fn get_active_pred_markets(env: Env) -> Vec<u64> {
+        prediction_market::get_active_markets(&env)
+    }
+
+    // ── futures contracts ────────────────────────────────────────────────────
+
+    /// Update the global futures configuration. Admin only.
+    ///
+    /// `initial_margin_bps` must be > `maintenance_margin_bps`.
+    /// Emits `("ft_cfg",)`.
+    pub fn set_futures_config(
+        env: Env,
+        admin: Address,
+        initial_margin_bps: u32,
+        maintenance_margin_bps: u32,
+        liquidation_penalty_bps: u32,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if maintenance_margin_bps >= initial_margin_bps {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        let cfg = futures::FuturesConfig {
+            initial_margin_bps,
+            maintenance_margin_bps,
+            liquidation_penalty_bps,
+        };
+        futures::save_config(&env, &cfg);
+        env.events().publish((symbol_short!("ft_cfg"),), (initial_margin_bps, maintenance_margin_bps));
+    }
+
+    /// Open a new futures contract (long side).
+    ///
+    /// The caller posts initial margin and specifies the contract price, size,
+    /// and settlement date. Returns the new contract ID.
+    /// Emits `("ft_open",)`.
+    pub fn open_futures(
+        env: Env,
+        long_party: Address,
+        token: Address,
+        contract_price: i128,
+        size: i128,
+        settles_at: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        long_party.require_auth();
+
+        if contract_price <= 0 {
+            panic_with_error!(&env, TipJarError::FuturesInvalidPrice);
+        }
+        if size < futures::MIN_CONTRACT_SIZE {
+            panic_with_error!(&env, TipJarError::FuturesSizeTooSmall);
+        }
+        if settles_at <= env.ledger().timestamp() {
+            panic_with_error!(&env, TipJarError::InvalidUnlockTime);
+        }
+        if !env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let contract_id =
+            futures::open_long(&env, &long_party, &token, contract_price, size, settles_at);
+
+        env.events().publish(
+            (symbol_short!("ft_open"),),
+            (contract_id, long_party, token, contract_price, size, settles_at),
+        );
+
+        contract_id
+    }
+
+    /// Match the short side of an existing unmatched futures contract.
+    ///
+    /// The short party posts initial margin equal to the long party's margin.
+    /// Emits `("ft_match",)`.
+    pub fn match_futures(env: Env, short_party: Address, contract_id: u64) {
+        Self::require_not_paused(&env);
+        short_party.require_auth();
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+        if fc.short_party.is_some() {
+            panic_with_error!(&env, TipJarError::FuturesAlreadyMatched);
+        }
+
+        futures::match_short(&env, &short_party, contract_id);
+
+        env.events().publish(
+            (symbol_short!("ft_match"),),
+            (contract_id, short_party),
+        );
+    }
+
+    /// Update the mark price for a futures contract (oracle / admin only).
+    ///
+    /// Recalculates unrealised P&L for both sides.
+    /// Emits `("ft_mark",)`.
+    pub fn update_futures_mark_price(
+        env: Env,
+        admin: Address,
+        contract_id: u64,
+        new_price: i128,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if new_price <= 0 {
+            panic_with_error!(&env, TipJarError::FuturesInvalidPrice);
+        }
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+
+        futures::update_mark_price(&env, contract_id, new_price);
+
+        env.events().publish(
+            (symbol_short!("ft_mark"),),
+            (contract_id, new_price),
+        );
+    }
+
+    /// Add margin to a futures position to avoid liquidation.
+    ///
+    /// `side` must match the caller's role in the contract.
+    /// Emits `("ft_margin",)`.
+    pub fn add_futures_margin(
+        env: Env,
+        trader: Address,
+        contract_id: u64,
+        side: futures::Side,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        trader.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+
+        futures::add_margin(&env, &trader, contract_id, side, amount);
+
+        env.events().publish(
+            (symbol_short!("ft_margin"),),
+            (contract_id, trader, amount),
+        );
+    }
+
+    /// Liquidate an under-margined futures position.
+    ///
+    /// Any caller may trigger liquidation when a side's effective margin
+    /// falls below the maintenance margin. The liquidator receives the
+    /// liquidation penalty. Returns the penalty paid.
+    /// Emits `("ft_liq",)`.
+    pub fn liquidate_futures(env: Env, liquidator: Address, contract_id: u64) -> i128 {
+        liquidator.require_auth();
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+        if fc.short_party.is_none() {
+            panic_with_error!(&env, TipJarError::FuturesNotMatched);
+        }
+
+        // Verify at least one side is actually liquidatable
+        if !futures::margin::long_is_liquidatable(&fc)
+            && !futures::margin::short_is_liquidatable(&fc)
+        {
+            panic_with_error!(&env, TipJarError::FuturesPositionHealthy);
+        }
+
+        let penalty = futures::liquidate(&env, &liquidator, contract_id);
+
+        env.events().publish(
+            (symbol_short!("ft_liq"),),
+            (contract_id, liquidator, penalty),
+        );
+
+        penalty
+    }
+
+    /// Mark a futures contract as pending settlement once its date has passed.
+    ///
+    /// Callable by anyone after `settles_at`. Emits `("ft_pend",)`.
+    pub fn mark_futures_pending(env: Env, contract_id: u64) {
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+        if env.ledger().timestamp() < fc.settles_at {
+            panic_with_error!(&env, TipJarError::FuturesNotDue);
+        }
+
+        futures::settlement::mark_pending(&env, contract_id);
+
+        env.events().publish((symbol_short!("ft_pend"),), contract_id);
+    }
+
+    /// Settle a futures contract at the given final price.
+    ///
+    /// Admin / oracle provides the final settlement price. Both parties
+    /// receive their payouts. Returns `(long_payout, short_payout)`.
+    /// Emits `("ft_settle",)`.
+    pub fn settle_futures(
+        env: Env,
+        admin: Address,
+        contract_id: u64,
+        final_price: i128,
+    ) -> (i128, i128) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if final_price <= 0 {
+            panic_with_error!(&env, TipJarError::FuturesInvalidPrice);
+        }
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+
+        if fc.status == futures::FuturesStatus::Settled
+            || fc.status == futures::FuturesStatus::Liquidated
+            || fc.status == futures::FuturesStatus::Cancelled
+        {
+            panic_with_error!(&env, TipJarError::FuturesAlreadyClosed);
+        }
+        if fc.short_party.is_none() {
+            panic_with_error!(&env, TipJarError::FuturesNotMatched);
+        }
+        if env.ledger().timestamp() < fc.settles_at {
+            panic_with_error!(&env, TipJarError::FuturesNotDue);
+        }
+
+        let (long_payout, short_payout) =
+            futures::settlement::settle(&env, contract_id, final_price);
+
+        env.events().publish(
+            (symbol_short!("ft_settle"),),
+            (contract_id, final_price, long_payout, short_payout),
+        );
+
+        (long_payout, short_payout)
+    }
+
+    /// Cancel an unmatched futures contract and refund the long party's margin.
+    ///
+    /// Only the long party (contract creator) may cancel before a short is matched.
+    /// Emits `("ft_cancel",)`.
+    pub fn cancel_futures(env: Env, caller: Address, contract_id: u64) {
+        caller.require_auth();
+
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+
+        if fc.status != futures::FuturesStatus::Active {
+            panic_with_error!(&env, TipJarError::FuturesNotActive);
+        }
+        if fc.short_party.is_some() {
+            panic_with_error!(&env, TipJarError::FuturesAlreadyMatched);
+        }
+        if fc.long_party != caller {
+            panic_with_error!(&env, TipJarError::FuturesUnauthorized);
+        }
+
+        futures::cancel_contract(&env, &caller, contract_id);
+
+        env.events().publish((symbol_short!("ft_cancel"),), contract_id);
+    }
+
+    // ── futures queries ──────────────────────────────────────────────────────
+
+    /// Get a futures contract by ID.
+    pub fn get_futures_contract(
+        env: Env,
+        contract_id: u64,
+    ) -> Option<futures::FuturesContract> {
+        futures::get_contract(&env, contract_id)
+    }
+
+    /// Get the aggregated position summary for a trader.
+    pub fn get_futures_position(env: Env, trader: Address) -> futures::FuturesPosition {
+        futures::get_position(&env, &trader)
+    }
+
+    /// Get all contract IDs for a trader.
+    pub fn get_trader_futures(env: Env, trader: Address) -> Vec<u64> {
+        futures::get_trader_contracts(&env, &trader)
+    }
+
+    /// Get all active futures contract IDs.
+    pub fn get_active_futures(env: Env) -> Vec<u64> {
+        futures::get_active_contracts(&env)
+    }
+
+    /// Compute the expected payout for a side at a hypothetical final price.
+    pub fn compute_futures_payout(
+        env: Env,
+        contract_id: u64,
+        final_price: i128,
+        side: futures::Side,
+    ) -> i128 {
+        let fc = futures::get_contract(&env, contract_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::FuturesNotFound));
+        futures::settlement::compute_payout(
+            fc.long_margin,
+            fc.short_margin,
+            fc.contract_price,
+            fc.size,
+            final_price,
+            side,
+        )
+    }
+
+    /// Get the current futures configuration.
+    pub fn get_futures_config(env: Env) -> futures::FuturesConfig {
+        futures::get_config(&env)
+    }
+
+    // ── volatility index ─────────────────────────────────────────────────────
+
+    /// Update the global volatility module configuration. Admin only.
+    ///
+    /// Emits `("tvi_cfg",)`.
+    pub fn set_volatility_config(
+        env: Env,
+        admin: Address,
+        default_window_size: u32,
+        min_observation_interval: u64,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if default_window_size < volatility::MIN_WINDOW_SIZE
+            || default_window_size > volatility::MAX_WINDOW_SIZE
+        {
+            panic_with_error!(&env, TipJarError::VolInvalidWindow);
+        }
+        let cfg = volatility::VolatilityConfig {
+            default_window_size,
+            min_observation_interval,
+        };
+        volatility::save_config(&env, &cfg);
+        env.events().publish(
+            (symbol_short!("tvi_cfg"),),
+            (default_window_size, min_observation_interval),
+        );
+    }
+
+    /// Create a new volatility index for a (creator, token) pair.
+    ///
+    /// `window_size` is the number of observations in the rolling window
+    /// (2 – 256). Pass 0 to use the global default.
+    /// Returns the new index ID. Emits `("tvi_new",)`.
+    pub fn create_volatility_index(
+        env: Env,
+        creator: Address,
+        token: Address,
+        window_size: u32,
+    ) -> u64 {
+        creator.require_auth();
+
+        let effective_window = if window_size == 0 {
+            volatility::get_config(&env).default_window_size
+        } else {
+            window_size
+        };
+
+        if effective_window < volatility::MIN_WINDOW_SIZE
+            || effective_window > volatility::MAX_WINDOW_SIZE
+        {
+            panic_with_error!(&env, TipJarError::VolInvalidWindow);
+        }
+        if !env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let index_id = volatility::create_index(&env, &creator, &token, effective_window);
+
+        env.events().publish(
+            (symbol_short!("tvi_new"),),
+            (index_id, creator, token, effective_window),
+        );
+
+        index_id
+    }
+
+    /// Record a new tip-amount observation on a volatility index.
+    ///
+    /// Recomputes rolling mean, variance, and volatility in basis points.
+    /// Stores a history snapshot. Emits `("tvi_upd",)`.
+    pub fn record_volatility_observation(
+        env: Env,
+        index_id: u64,
+        amount: i128,
+    ) {
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let idx = volatility::get_index(&env, index_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
+
+        if !idx.active {
+            panic_with_error!(&env, TipJarError::VolIndexNotActive);
+        }
+
+        let cfg = volatility::get_config(&env);
+        let now = env.ledger().timestamp();
+        if now < idx.last_update + cfg.min_observation_interval {
+            panic_with_error!(&env, TipJarError::VolObsTooFrequent);
+        }
+
+        let updated = volatility::record_observation(&env, index_id, amount);
+
+        env.events().publish(
+            (symbol_short!("tvi_upd"),),
+            (
+                index_id,
+                amount,
+                updated.mean,
+                updated.variance,
+                updated.volatility_bps,
+            ),
+        );
+    }
+
+    /// Deactivate a volatility index. Only the creator may call this.
+    ///
+    /// Emits `("tvi_off",)`.
+    pub fn deactivate_volatility_index(env: Env, creator: Address, index_id: u64) {
+        creator.require_auth();
+
+        let idx = volatility::get_index(&env, index_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
+
+        if idx.creator != creator {
+            panic_with_error!(&env, TipJarError::VolUnauthorized);
+        }
+        if !idx.active {
+            panic_with_error!(&env, TipJarError::VolIndexNotActive);
+        }
+
+        volatility::deactivate_index(&env, &creator, index_id);
+
+        env.events().publish((symbol_short!("tvi_off"),), index_id);
+    }
+
+    // ── volatility queries ───────────────────────────────────────────────────
+
+    /// Get the current state of a volatility index.
+    pub fn get_volatility_index(
+        env: Env,
+        index_id: u64,
+    ) -> Option<volatility::VolatilityIndex> {
+        volatility::get_index(&env, index_id)
+    }
+
+    /// Get the most-recent volatility snapshot for an index.
+    pub fn get_latest_volatility(
+        env: Env,
+        index_id: u64,
+    ) -> Option<volatility::VolatilitySnapshot> {
+        volatility::history::get_latest_snapshot(&env, index_id)
+    }
+
+    /// Get up to `limit` most-recent volatility snapshots (newest first).
+    pub fn get_volatility_history(
+        env: Env,
+        index_id: u64,
+        limit: u32,
+    ) -> Vec<volatility::VolatilitySnapshot> {
+        volatility::history::get_recent_snapshots(&env, index_id, limit)
+    }
+
+    /// Get volatility snapshots within a time range `[start_ts, end_ts]`.
+    pub fn get_volatility_in_range(
+        env: Env,
+        index_id: u64,
+        start_ts: u64,
+        end_ts: u64,
+        limit: u32,
+    ) -> Vec<volatility::VolatilitySnapshot> {
+        volatility::history::get_snapshots_in_range(&env, index_id, start_ts, end_ts, limit)
+    }
+
+    /// Get all volatility index IDs for a creator.
+    pub fn get_creator_volatility_indices(env: Env, creator: Address) -> Vec<u64> {
+        volatility::get_creator_indices(&env, &creator)
+    }
+
+    /// Get the current observations in the rolling window for an index.
+    pub fn get_volatility_window(
+        env: Env,
+        index_id: u64,
+    ) -> Vec<volatility::VolObservation> {
+        let idx = volatility::get_index(&env, index_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
+        volatility::collect_window(&env, &idx)
+    }
+
+    /// Compute max drawdown in basis points for the current window.
+    pub fn get_volatility_max_drawdown(env: Env, index_id: u64) -> i128 {
+        let idx = volatility::get_index(&env, index_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
+        let window = volatility::collect_window(&env, &idx);
+        volatility::calculator::max_drawdown_bps(&window)
+    }
+
+    /// Compute rate of change in basis points across the current window.
+    pub fn get_volatility_rate_of_change(env: Env, index_id: u64) -> i128 {
+        let idx = volatility::get_index(&env, index_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
+        let window = volatility::collect_window(&env, &idx);
+        volatility::calculator::rate_of_change_bps(&window)
+    }
+
+    // ── AMM: pool management ─────────────────────────────────────────────────
+
+    /// Create a new constant-product liquidity pool for a token pair.
+    ///
+    /// The creator seeds the pool with initial liquidity and receives LP shares.
+    /// Returns `(pool_id, shares_minted)`. Emits `("amm_new",)`.
+    pub fn amm_create_pool(
+        env: Env,
+        creator: Address,
+        token_a: Address,
+        token_b: Address,
+        amount_a: i128,
+        amount_b: i128,
+        fee_bps: u32,
+    ) -> (u64, i128) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if !env.storage().instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token_a.clone()))
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+        if !env.storage().instance()
+            .get::<DataKey, bool>(&DataKey::TokenWhitelist(token_b.clone()))
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let fee = if fee_bps == 0 { amm::DEFAULT_FEE_BPS } else { fee_bps };
+        let (pool_id, shares) =
+            amm::pool::create_pool(&env, &creator, &token_a, &token_b, amount_a, amount_b, Some(fee));
+
+        env.events().publish(
+            (symbol_short!("amm_new"),),
+            (pool_id, creator, token_a, token_b, amount_a, amount_b, fee),
+        );
+
+        (pool_id, shares)
+    }
+
+    /// Add liquidity to an existing AMM pool.
+    ///
+    /// Deposits are adjusted to maintain the current pool ratio.
+    /// `amount_a_min` / `amount_b_min` guard against slippage.
+    /// Returns `AddLiquidityResult`. Emits `("amm_add",)`.
+    pub fn amm_add_liquidity(
+        env: Env,
+        provider: Address,
+        pool_id: u64,
+        amount_a_desired: i128,
+        amount_b_desired: i128,
+        amount_a_min: i128,
+        amount_b_min: i128,
+    ) -> amm::AddLiquidityResult {
+        Self::require_not_paused(&env);
+        provider.require_auth();
+
+        amm::get_pool(&env, pool_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::AmmPoolNotFound));
+
+        let result = amm::pool::add_liquidity(
+            &env, pool_id, &provider,
+            amount_a_desired, amount_b_desired,
+            amount_a_min, amount_b_min,
+        );
+
+        env.events().publish(
+            (symbol_short!("amm_add"),),
+            (pool_id, provider, result.amount_a, result.amount_b, result.shares_minted),
+        );
+
+        result
+    }
+
+    /// Remove liquidity from an AMM pool by burning LP shares.
+    ///
+    /// Automatically claims pending fee rewards.
+    /// Returns `RemoveLiquidityResult`. Emits `("amm_rem",)`.
+    pub fn amm_remove_liquidity(
+        env: Env,
+        provider: Address,
+        pool_id: u64,
+        shares: i128,
+        amount_a_min: i128,
+        amount_b_min: i128,
+    ) -> amm::RemoveLiquidityResult {
+        Self::require_not_paused(&env);
+        provider.require_auth();
+
+        let result = amm::pool::remove_liquidity(
+            &env, pool_id, &provider, shares, amount_a_min, amount_b_min,
+        );
+
+        env.events().publish(
+            (symbol_short!("amm_rem"),),
+            (pool_id, provider, result.amount_a, result.amount_b, result.rewards_claimed),
+        );
+
+        result
+    }
+
+    // ── AMM: swaps ───────────────────────────────────────────────────────────
+
+    /// Swap an exact input amount for as many output tokens as possible.
+    ///
+    /// `min_amount_out` enforces slippage tolerance.
+    /// Returns `SwapResult`. Emits `("amm_swap",)`.
+    pub fn amm_swap(
+        env: Env,
+        sender: Address,
+        pool_id: u64,
+        token_in: Address,
+        amount_in: i128,
+        min_amount_out: i128,
+    ) -> amm::SwapResult {
+        Self::require_not_paused(&env);
+        sender.require_auth();
+
+        if amount_in <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let result = amm::swap::swap(&env, pool_id, &sender, &token_in, amount_in, min_amount_out);
+
+        env.events().publish(
+            (symbol_short!("amm_swap"),),
+            (pool_id, sender, token_in, amount_in, result.amount_out, result.fee_amount),
+        );
+
+        result
+    }
+
+    // ── AMM: rewards ─────────────────────────────────────────────────────────
+
+    /// Claim accumulated swap-fee rewards without removing liquidity.
+    ///
+    /// Returns the amount of token A transferred. Emits `("amm_clm",)`.
+    pub fn amm_claim_rewards(env: Env, provider: Address, pool_id: u64) -> i128 {
+        provider.require_auth();
+
+        amm::get_pool(&env, pool_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::AmmPoolNotFound));
+
+        let claimed = amm::pool::claim_rewards(&env, pool_id, &provider);
+
+        env.events().publish(
+            (symbol_short!("amm_clm"),),
+            (pool_id, provider, claimed),
+        );
+
+        claimed
+    }
+
+    /// Update the swap fee for a pool. Admin only. Emits `("amm_fee",)`.
+    pub fn amm_set_pool_fee(env: Env, admin: Address, pool_id: u64, fee_bps: u32) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if fee_bps > amm::MAX_FEE_BPS {
+            panic_with_error!(&env, TipJarError::AmmFeeTooHigh);
+        }
+        amm::pool::set_pool_fee(&env, pool_id, fee_bps);
+        env.events().publish((symbol_short!("amm_fee"),), (pool_id, fee_bps));
+    }
+
+    // ── AMM: queries ─────────────────────────────────────────────────────────
+
+    /// Get pool state by ID.
+    pub fn amm_get_pool(env: Env, pool_id: u64) -> Option<amm::LiquidityPool> {
+        amm::get_pool(&env, pool_id)
+    }
+
+    /// Look up a pool ID by token pair (order-independent).
+    pub fn amm_get_pool_id(env: Env, token_a: Address, token_b: Address) -> Option<u64> {
+        amm::get_pool_id_by_tokens(&env, &token_a, &token_b)
+    }
+
+    /// Get the expected output for a swap (view, no state change).
+    pub fn amm_get_amount_out(
+        env: Env,
+        pool_id: u64,
+        token_in: Address,
+        amount_in: i128,
+    ) -> i128 {
+        amm::swap::get_amount_out(&env, pool_id, &token_in, amount_in)
+    }
+
+    /// Get the required input for a desired output (view, no state change).
+    pub fn amm_get_amount_in(
+        env: Env,
+        pool_id: u64,
+        token_in: Address,
+        amount_out: i128,
+    ) -> i128 {
+        amm::swap::get_amount_in(&env, pool_id, &token_in, amount_out)
+    }
+
+    /// Get the spot price of `token_in` × 1_000_000.
+    pub fn amm_spot_price(env: Env, pool_id: u64, token_in: Address) -> i128 {
+        amm::pricing::spot_price(&env, pool_id, &token_in)
+    }
+
+    /// Get the price impact in basis points for a hypothetical swap.
+    pub fn amm_price_impact(env: Env, pool_id: u64, token_in: Address, amount_in: i128) -> i128 {
+        amm::pricing::get_price_impact(&env, pool_id, &token_in, amount_in)
+    }
+
+    /// Get the LP share balance for a provider.
+    pub fn amm_get_shares(env: Env, pool_id: u64, provider: Address) -> i128 {
+        amm::pool::get_provider_shares(&env, pool_id, &provider)
+    }
+
+    /// Get pending (unclaimed) fee rewards for a provider.
+    pub fn amm_get_pending_rewards(env: Env, pool_id: u64, provider: Address) -> i128 {
+        amm::pool::get_pending_rewards(&env, pool_id, &provider)
+    }
+
+    /// Get the constant-product invariant k = reserve_a × reserve_b.
+    pub fn amm_get_invariant(env: Env, pool_id: u64) -> i128 {
+        amm::pricing::get_invariant(&env, pool_id)
+    }
+
+    /// Get total fees collected by a pool since creation.
+    pub fn amm_total_fees(env: Env, pool_id: u64) -> i128 {
+        amm::pricing::total_fees_collected(&env, pool_id)
+    }
+
+    /// Get LP share value as `(token_a_per_share, token_b_per_share)` × 1_000_000.
+    pub fn amm_share_value(env: Env, pool_id: u64) -> (i128, i128) {
+        amm::pricing::share_value(&env, pool_id)
     }
 }

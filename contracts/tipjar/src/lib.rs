@@ -85,6 +85,9 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
+// Fractional ownership of tip revenue streams
+pub mod fractional_ownership;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -851,6 +854,12 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
+    /// Fractional ownership pool for a creator.
+    FractionPool(Address),
+    /// Fraction position keyed by (creator, holder).
+    FractionPosition(Address, Address),
+    /// List of fraction holders for a creator.
+    FractionHolders(Address),
 }
 
 #[contracterror]
@@ -8862,6 +8871,61 @@ a
         let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
         let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
+    }
+
+    // ── fractional ownership ─────────────────────────────────────────────────
+
+    /// Mint `total_supply` fractions for `creator`.
+    pub fn mint_fractions(
+        env: Env,
+        creator: Address,
+        total_supply: u64,
+        buyout_price_per_fraction: i128,
+    ) {
+        fractional_ownership::mint_fractions(&env, &creator, total_supply, buyout_price_per_fraction);
+    }
+
+    /// Record `amount` of revenue for `creator`'s fraction pool.
+    pub fn accrue_revenue(env: Env, creator: Address, amount: i128) {
+        fractional_ownership::accrue_revenue(&env, &creator, amount);
+    }
+
+    /// Claim accumulated revenue for `holder` in `creator`'s pool.
+    pub fn claim_fraction_revenue(env: Env, creator: Address, holder: Address) -> i128 {
+        fractional_ownership::claim_revenue(&env, &creator, &holder)
+    }
+
+    /// Transfer `amount` fractions from `from` to `to`.
+    pub fn transfer_fractions(
+        env: Env,
+        creator: Address,
+        from: Address,
+        to: Address,
+        amount: u64,
+    ) {
+        fractional_ownership::transfer_fractions(&env, &creator, &from, &to, amount);
+    }
+
+    /// Buy out all fractions not held by `buyer`. Returns total cost.
+    pub fn buyout_fractions(env: Env, creator: Address, buyer: Address) -> i128 {
+        fractional_ownership::buyout(&env, &creator, &buyer)
+    }
+
+    /// Returns the fraction pool for `creator`.
+    pub fn get_fraction_pool(
+        env: Env,
+        creator: Address,
+    ) -> Option<fractional_ownership::FractionPool> {
+        fractional_ownership::get_pool(&env, &creator)
+    }
+
+    /// Returns the fraction position for `holder` in `creator`'s pool.
+    pub fn get_fraction_position(
+        env: Env,
+        creator: Address,
+        holder: Address,
+    ) -> fractional_ownership::FractionPosition {
+        fractional_ownership::get_position(&env, &creator, &holder)
     }
 }
 

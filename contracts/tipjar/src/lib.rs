@@ -12,6 +12,9 @@ pub mod synthetic;
 /// Polynomial commitment scheme for efficient tip data verification.
 pub mod poly_commit;
 
+/// Sidechain integration for scalable tip processing.
+pub mod sidechain;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     token, Address, BytesN, Env, Map, String, Vec,
@@ -1094,6 +1097,22 @@ pub enum CreditError {
     AmmInsufficientLiquidity = 141,
     /// Provider has insufficient LP shares.
     AmmInsufficientShares = 142,
+    /// Sidechain feature is not initialized.
+    SidechainNotInitialized = 143,
+    /// Sidechain feature is disabled.
+    SidechainDisabled = 144,
+    /// Caller is not the sidechain operator.
+    SidechainUnauthorized = 145,
+    /// Checkpoint with this sequence number was not found.
+    SidechainCheckpointNotFound = 146,
+    /// Checkpoint has already been finalized.
+    SidechainAlreadyFinalized = 147,
+    /// Tip batch was not found.
+    SidechainBatchNotFound = 148,
+    /// Tip batch has already been settled.
+    SidechainBatchAlreadySettled = 149,
+    /// Checkpoint must be finalized before settling batches.
+    SidechainCheckpointNotFinalized = 150,
 }
 
 #[contracterror]

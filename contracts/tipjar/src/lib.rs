@@ -12,6 +12,9 @@ pub mod synthetic;
 /// Polynomial commitment scheme for efficient tip data verification.
 pub mod poly_commit;
 
+/// Recursive proof composition for efficient verification of tip chains.
+pub mod recursive_proof;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     token, Address, BytesN, Env, Map, String, Vec,

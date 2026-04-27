@@ -24,10 +24,15 @@ base64 = "0.22"
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
 proptest = "1.4"
+criterion = "0.5"
 
 [[test]]
 name = "gas_benchmarks"
 path = "benches/gas_benchmarks.rs"
+
+[[bench]]
+name = "contract_bench"
+harness = false
 
 [[test]]
 name = "quickcheck_properties"

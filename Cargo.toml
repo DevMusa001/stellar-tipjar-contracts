@@ -1,5 +1,5 @@
 [workspace]
-members = ["contracts/tipjar", "indexer", "sdk", "tests/integration", "security", "simulator", "tools/gas-estimator"]
+members = ["contracts/tipjar", "indexer", "sdk", "tests/integration", "security", "simulator", "tools/gas-estimator", "tools/gas"]
 resolver = "2"
 
 [workspace.package]

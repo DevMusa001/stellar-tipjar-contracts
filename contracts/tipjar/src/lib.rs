@@ -15,6 +15,9 @@ pub mod poly_commit;
 /// Sidechain integration for scalable tip processing.
 pub mod sidechain;
 
+/// Optimistic rollup for scalable tip processing with fraud proofs.
+pub mod rollup;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     token, Address, BytesN, Env, Map, String, Vec,
@@ -855,6 +858,24 @@ pub enum DataKey {
     SidechainBatchCounter,
     /// Finalized sidechain tip total per (creator, token).
     SidechainFinalizedTotal(Address, Address),
+    /// Rollup sequencer address.
+    RollupSequencer,
+    /// Rollup feature enabled flag.
+    RollupEnabled,
+    /// Challenge period in seconds.
+    RollupChallengePeriod,
+    /// Rollup batch record keyed by batch ID.
+    RollupBatch(u64),
+    /// Global rollup batch counter.
+    RollupBatchCounter,
+    /// Fraud proof record keyed by batch ID.
+    RollupFraudProof(u64),
+    /// Count of pending rollup batches.
+    RollupPendingCount,
+    /// Count of finalized rollup batches.
+    RollupFinalizedCount,
+    /// Count of challenged rollup batches.
+    RollupChallengedCount,
 }
 
 #[contracterror]
@@ -1120,6 +1141,20 @@ pub enum CreditError {
     SidechainBatchAlreadySettled = 149,
     /// Checkpoint must be finalized before settling batches.
     SidechainCheckpointNotFinalized = 150,
+    /// Rollup is not initialized.
+    RollupNotInitialized = 151,
+    /// Caller is not the rollup sequencer.
+    RollupUnauthorized = 152,
+    /// Rollup batch not found.
+    RollupBatchNotFound = 153,
+    /// Batch is not in pending status.
+    RollupBatchNotPending = 154,
+    /// Challenge period has not elapsed yet.
+    RollupChallengeActive = 155,
+    /// Challenge period has already elapsed; fraud proof too late.
+    RollupChallengeExpired = 156,
+    /// Fraud proof roots match; no fraud detected.
+    RollupNoFraudDetected = 157,
 }
 
 #[contracterror]
@@ -8596,6 +8631,90 @@ a
     /// Returns a specific checkpoint by sequence number.
     pub fn get_checkpoint(env: Env, seq: u64) -> Option<sidechain::Checkpoint> {
         sidechain::state::get_checkpoint(&env, seq)
+    }
+
+    // ── optimistic rollup ────────────────────────────────────────────────────
+
+    /// Initialize the rollup with a designated sequencer.
+    ///
+    /// Admin only. Emits `("rl_init",)`.
+    pub fn init_rollup(env: Env, admin: Address, sequencer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::RollupSequencer, &sequencer);
+        env.storage().instance().set(&DataKey::RollupEnabled, &true);
+        env.storage().instance().set(&DataKey::RollupChallengePeriod, &rollup::CHALLENGE_PERIOD);
+        env.storage().instance().set(&DataKey::RollupBatchCounter, &0u64);
+        env.storage().instance().set(&DataKey::RollupPendingCount, &0u64);
+        env.storage().instance().set(&DataKey::RollupFinalizedCount, &0u64);
+        env.storage().instance().set(&DataKey::RollupChallengedCount, &0u64);
+        env.events().publish((symbol_short!("rl_init"),), sequencer);
+    }
+
+    /// Submit a tip batch to the rollup. Sequencer only.
+    ///
+    /// The batch enters a challenge period before credits are applied.
+    /// Returns the new batch ID.
+    pub fn submit_rollup_batch(
+        env: Env,
+        sequencer: Address,
+        state_root: BytesN<32>,
+        creator: Address,
+        token: Address,
+        total_amount: i128,
+        tip_count: u32,
+    ) -> u64 {
+        let enabled: bool = env.storage().instance().get(&DataKey::RollupEnabled).unwrap_or(false);
+        if !enabled {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if total_amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        rollup::batch::submit_batch(&env, &sequencer, state_root, creator, token, total_amount, tip_count)
+    }
+
+    /// Finalize a rollup batch after the challenge period. Permissionless.
+    pub fn finalize_rollup_batch(env: Env, batch_id: u64) {
+        rollup::batch::finalize_batch(&env, batch_id);
+    }
+
+    /// Submit a fraud proof challenging a pending batch. Permissionless.
+    ///
+    /// Returns `true` if the challenge was accepted (roots differ).
+    pub fn submit_fraud_proof(
+        env: Env,
+        challenger: Address,
+        batch_id: u64,
+        claimed_root: BytesN<32>,
+    ) -> bool {
+        rollup::fraud_proof::submit_fraud_proof(&env, &challenger, batch_id, claimed_root)
+    }
+
+    /// Returns the fraud proof for a batch, if one was accepted.
+    pub fn get_fraud_proof(env: Env, batch_id: u64) -> Option<rollup::FraudProof> {
+        rollup::fraud_proof::get_fraud_proof(&env, batch_id)
+    }
+
+    /// Returns a rollup batch by ID.
+    pub fn get_rollup_batch(env: Env, batch_id: u64) -> Option<rollup::RollupBatch> {
+        env.storage().persistent().get(&DataKey::RollupBatch(batch_id))
+    }
+
+    /// Returns the current rollup state summary.
+    pub fn get_rollup_state(env: Env) -> rollup::RollupState {
+        let enabled: bool = env.storage().instance().get(&DataKey::RollupEnabled).unwrap_or(false);
+        let sequencer: Address = env.storage().instance().get(&DataKey::RollupSequencer)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::Unauthorized));
+        let challenge_period: u64 = env.storage().instance()
+            .get(&DataKey::RollupChallengePeriod).unwrap_or(rollup::CHALLENGE_PERIOD);
+        let pending_batches: u64 = env.storage().instance().get(&DataKey::RollupPendingCount).unwrap_or(0);
+        let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
+        let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
+        rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
     }
 }
 

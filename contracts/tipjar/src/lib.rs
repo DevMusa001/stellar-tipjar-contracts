@@ -88,6 +88,9 @@ pub mod payment_channel;
 // Tip state channels (off-chain tips with on-chain settlement)
 pub mod state_channel;
 
+// Meta-transactions for gasless tipping
+pub mod meta_tx;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -858,6 +861,16 @@ pub enum DataKey {
     TipChannel(Address, Address, Address),
     /// Individual tip entry within a state channel keyed by (tipper, creator, token, index).
     TipChannelEntry(Address, Address, Address, u64),
+    /// Per-sender meta-transaction nonce keyed by sender address.
+    MetaTxNonce(Address),
+    /// Trusted relayer flag keyed by relayer address.
+    MetaTxRelayer(Address),
+    /// Consumed request nullifier keyed by request hash (replay protection).
+    MetaTxNullifier(BytesN<32>),
+    /// Meta-transaction execution record keyed by record ID.
+    MetaTxRecord(u64),
+    /// Global meta-transaction record counter.
+    MetaTxCounter,
 }
 
 #[contracterror]
@@ -1198,6 +1211,31 @@ pub enum TipChannelError {
     TippedAmountDecreased = 307,
     /// Channel is already settled.
     AlreadySettled = 308,
+}
+
+/// Errors for meta-transaction (gasless tip) operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum MetaTxError {
+    /// Relayer is not in the trusted relayer set.
+    UntrustedRelayer = 400,
+    /// Signed request has passed its `valid_until` timestamp.
+    RequestExpired = 401,
+    /// Provided nonce does not match the stored per-sender nonce.
+    InvalidNonce = 402,
+    /// This request hash has already been executed (replay attempt).
+    AlreadyExecuted = 403,
+    /// Ed25519 signature verification failed.
+    InvalidSignature = 404,
+    /// Tip amount in the request is invalid (≤ 0).
+    InvalidAmount = 405,
+    /// Token in the request is not whitelisted.
+    TokenNotWhitelisted = 406,
+    /// Relayer is already registered.
+    RelayerAlreadyRegistered = 407,
+    /// Relayer is not registered (cannot remove).
+    RelayerNotFound = 408,
 }
 
 #[contract]
@@ -8981,6 +9019,164 @@ a
         token: Address,
     ) -> Vec<state_channel::ChannelTip> {
         state_channel::get_channel_tips(&env, &tipper, &creator, &token)
+    }
+
+    // ── meta-transactions (gasless tipping) ──────────────────────────────────
+
+    /// Registers a trusted relayer for meta-transactions. Admin only.
+    ///
+    /// Emits `("mtx_reg",)` with `(relayer)`.
+    pub fn register_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerAlreadyRegistered);
+        }
+
+        meta_tx::register_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_reg"),),
+            (relayer,),
+        );
+    }
+
+    /// Removes a trusted relayer. Admin only.
+    ///
+    /// Emits `("mtx_rem",)` with `(relayer)`.
+    pub fn remove_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if !meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerNotFound);
+        }
+
+        meta_tx::remove_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_rem"),),
+            (relayer,),
+        );
+    }
+
+    /// Executes a meta-transaction tip on behalf of a user.
+    ///
+    /// The relayer submits a signed `MetaTipRequest`. The contract verifies:
+    ///   - Relayer is trusted
+    ///   - Request has not expired
+    ///   - Nonce matches the stored per-sender nonce
+    ///   - Signature is valid
+    ///   - Request has not been replayed
+    ///
+    /// On success, executes the tip (or channel open) and increments the sender's nonce.
+    /// Returns the meta-tx record ID.
+    ///
+    /// Emits `("mtx_exec",)` with `(record_id, from, relayer, to, amount, nonce)`.
+    pub fn execute_meta_tip(
+        env: Env,
+        relayer: Address,
+        request: meta_tx::MetaTipRequest,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        relayer.require_auth();
+
+        // Validate amount
+        if request.amount <= 0 {
+            panic_with_error!(&env, MetaTxError::InvalidAmount);
+        }
+
+        // Validate token whitelist
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(request.token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, MetaTxError::TokenNotWhitelisted);
+        }
+
+        // Verify signature and replay protection
+        let hash = meta_tx::verify(&env, &relayer, &request);
+
+        // Execute the action based on request type
+        match request.action {
+            meta_tx::MetaTipAction::Tip => {
+                // Transfer tokens from `from` to contract
+                token::Client::new(&env, &request.token).transfer(
+                    &request.from,
+                    &env.current_contract_address(),
+                    &request.amount,
+                );
+
+                // Credit creator balance
+                let key = DataKey::CreatorBalance(request.to.clone(), request.token.clone());
+                let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&key, &(current + request.amount));
+
+                // Update creator total
+                let total_key = DataKey::CreatorTotal(request.to.clone(), request.token.clone());
+                let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&total_key, &(total + request.amount));
+
+                // Emit tip event
+                env.events().publish(
+                    (symbol_short!("tip"),),
+                    (request.from.clone(), request.to.clone(), request.token.clone(), request.amount),
+                );
+            }
+            meta_tx::MetaTipAction::OpenChannel => {
+                // Open a tip state channel
+                let key = DataKey::TipChannel(
+                    request.from.clone(),
+                    request.to.clone(),
+                    request.token.clone(),
+                );
+                if env.storage().persistent().has(&key) {
+                    panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+                }
+
+                // Default dispute window: 1 hour
+                let dispute_window = 3600u64;
+                state_channel::open(
+                    &env,
+                    &request.from,
+                    &request.to,
+                    &request.token,
+                    request.amount,
+                    dispute_window,
+                );
+            }
+        }
+
+        // Finalize: mark consumed, bump nonce, store record
+        meta_tx::finalize(&env, &relayer, &request, &hash)
+    }
+
+    /// Returns the current meta-transaction nonce for a sender.
+    pub fn get_meta_nonce(env: Env, sender: Address) -> u64 {
+        meta_tx::get_nonce(&env, &sender)
+    }
+
+    /// Returns whether a relayer is trusted for meta-transactions.
+    pub fn is_meta_relayer(env: Env, relayer: Address) -> bool {
+        meta_tx::is_trusted_relayer(&env, &relayer)
+    }
+
+    /// Returns a meta-transaction execution record by ID.
+    pub fn get_meta_record(env: Env, record_id: u64) -> Option<meta_tx::MetaTxRecord> {
+        meta_tx::get_record(&env, record_id)
     }
 
     // ── optimistic rollup ────────────────────────────────────────────────────

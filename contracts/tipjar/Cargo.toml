@@ -83,6 +83,6 @@ name = "poly_commit_tests"
 path = "tests/poly_commit_tests.rs"
 
 [[test]]
-name = "threshold_sig_tests"
-path = "tests/threshold_sig_tests.rs"
+name = "payment_channel_tests"
+path = "tests/payment_channel_tests.rs"
 

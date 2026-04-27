@@ -76,8 +76,8 @@ pub mod quadratic_funding;
 // TWAP oracle
 pub mod twap_oracle;
 
-// Threshold signatures
-pub mod threshold_sig;
+// Tip payment channels
+pub mod payment_channel;
 
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
@@ -841,14 +841,10 @@ pub enum DataKey {
     EncryptedTipCounter,
     /// Nullifier for encrypted tips (prevents double-spend).
     PrivacyNullifier(BytesN<32>),
-    /// Threshold policy record keyed by policy_id.
-    ThresholdPolicy(u64),
-    /// Global counter for threshold policy IDs.
-    ThresholdPolicyCtr,
-    /// Threshold tip record keyed by tip_id.
-    ThresholdTip(u64),
-    /// Global counter for threshold tip IDs.
-    ThresholdTipCtr,
+    /// Payment channel record keyed by (party_a, party_b, token).
+    PaymentChannel(Address, Address, Address),
+    /// Global counter for payment channel IDs.
+    ChannelCounter,
 }
 
 #[contracterror]
@@ -1115,25 +1111,25 @@ pub enum OtherError {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum ThresholdError {
-    /// No policy exists with the given ID.
-    PolicyNotFound = 300,
-    /// Threshold must be >= 1 and <= number of signers.
-    InvalidThreshold = 301,
-    /// Signer list must have at least one entry.
-    EmptySigner = 302,
-    /// No pending tip exists with the given ID.
-    TipNotFound = 303,
-    /// Tip is not in Pending status.
-    TipNotPending = 304,
-    /// Caller is not an authorised signer for this policy.
-    NotASigner = 305,
-    /// Caller has already submitted a partial signature for this tip.
-    AlreadySigned = 306,
-    /// Tip has not yet reached the required threshold.
-    ThresholdNotMet = 307,
-    /// Only the proposer may cancel this tip.
-    Unauthorized = 308,
+pub enum ChannelError {
+    /// No channel exists for the given parties and token.
+    ChannelNotFound = 200,
+    /// Channel is not in the Open state.
+    ChannelNotOpen = 201,
+    /// Provided nonce is not strictly greater than the current nonce.
+    StaleNonce = 202,
+    /// Caller is not a party to this channel.
+    NotChannelParty = 203,
+    /// Channel is not in the Disputed state.
+    ChannelNotDisputed = 204,
+    /// Dispute window has not yet elapsed.
+    DisputeWindowActive = 205,
+    /// Proposed balance exceeds total channel deposit.
+    InvalidChannelBalance = 206,
+    /// Deposit amount must be greater than zero.
+    InvalidDeposit = 207,
+    /// Dispute window must be greater than zero.
+    InvalidDisputeWindow = 208,
 }
 
 
@@ -8481,73 +8477,33 @@ a
         governance::conviction_integration::get_adjusted_proposal_threshold(&env, &voter)
     }
 
-    // ── threshold signatures ─────────────────────────────────────────────────
+    // ── payment channels ─────────────────────────────────────────────────────
 
-    /// Creates a threshold policy defining which signers can co-authorize tips.
+    /// Opens a bidirectional payment channel between `party_a` and `party_b`.
     ///
-    /// `threshold` must be >= 1 and <= `signers.len()`.
-    /// Returns the new policy ID.
-    /// Emits `("ts_policy",)` with data `(policy_id, owner, threshold)`.
-    pub fn create_threshold_policy(
-        env: Env,
-        owner: Address,
-        signers: Vec<Address>,
-        threshold: u32,
-    ) -> u64 {
-        Self::require_not_paused(&env);
-        owner.require_auth();
-
-        if signers.is_empty() {
-            panic_with_error!(&env, ThresholdError::EmptySigner);
-        }
-        if threshold == 0 || threshold > signers.len() {
-            panic_with_error!(&env, ThresholdError::InvalidThreshold);
-        }
-
-        let policy_id: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ThresholdPolicyCtr)
-            .unwrap_or(0u64);
-        env.storage()
-            .instance()
-            .set(&DataKey::ThresholdPolicyCtr, &(policy_id + 1));
-
-        let policy = threshold_sig::ThresholdPolicy {
-            policy_id,
-            owner: owner.clone(),
-            signers,
-            threshold,
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::ThresholdPolicy(policy_id), &policy);
-
-        env.events().publish(
-            (symbol_short!("ts_pol"),),
-            (policy_id, owner, threshold),
-        );
-        policy_id
-    }
-
-    /// Proposes a tip that requires threshold authorization before execution.
+    /// Both parties' deposits are transferred into contract escrow immediately.
+    /// `dispute_window` is the seconds a counterparty has to submit a newer state
+    /// during a unilateral close.
     ///
-    /// The proposer must be one of the policy's signers. Their signature is
-    /// counted immediately. Returns the new tip ID.
-    /// Emits `("ts_prop",)` with data `(tip_id, policy_id, creator, amount)`.
-    pub fn propose_threshold_tip(
+    /// Emits `("ch_open",)` with data `(party_a, party_b, token, total_deposit)`.
+    pub fn open_channel(
         env: Env,
-        proposer: Address,
-        policy_id: u64,
-        creator: Address,
+        party_a: Address,
+        party_b: Address,
         token: Address,
-        amount: i128,
-    ) -> u64 {
+        deposit_a: i128,
+        deposit_b: i128,
+        dispute_window: u64,
+    ) {
         Self::require_not_paused(&env);
-        proposer.require_auth();
+        party_a.require_auth();
+        party_b.require_auth();
 
-        if amount <= 0 {
-            panic_with_error!(&env, TipJarError::InvalidAmount);
+        if deposit_a <= 0 || deposit_b <= 0 {
+            panic_with_error!(&env, ChannelError::InvalidDeposit);
+        }
+        if dispute_window == 0 {
+            panic_with_error!(&env, ChannelError::InvalidDisputeWindow);
         }
 
         let whitelisted: bool = env
@@ -8559,221 +8515,233 @@ a
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let policy: threshold_sig::ThresholdPolicy = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ThresholdPolicy(policy_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::PolicyNotFound));
-
-        if !threshold_sig::is_signer(&policy.signers, &proposer) {
-            panic_with_error!(&env, ThresholdError::NotASigner);
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
         }
 
-        let tip_id: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ThresholdTipCtr)
-            .unwrap_or(0u64);
-        env.storage()
-            .instance()
-            .set(&DataKey::ThresholdTipCtr, &(tip_id + 1));
+        let channel = payment_channel::open(
+            &env, &party_a, &party_b, &token, deposit_a, deposit_b, dispute_window,
+        );
 
-        let mut approvals = Vec::new(&env);
-        approvals.push_back(proposer.clone());
+        // CEI: state before external calls
+        env.storage().persistent().set(&key, &channel);
 
-        let status = if threshold_sig::is_approved(
-            &threshold_sig::ThresholdTip {
-                tip_id,
-                policy_id,
-                proposer: proposer.clone(),
-                creator: creator.clone(),
-                token: token.clone(),
-                amount,
-                approvals: approvals.clone(),
-                status: threshold_sig::ThresholdTipStatus::Pending,
-                created_at: env.ledger().timestamp(),
-            },
-            policy.threshold,
-        ) {
-            threshold_sig::ThresholdTipStatus::Approved
-        } else {
-            threshold_sig::ThresholdTipStatus::Pending
-        };
-
-        let tip = threshold_sig::ThresholdTip {
-            tip_id,
-            policy_id,
-            proposer: proposer.clone(),
-            creator: creator.clone(),
-            token: token.clone(),
-            amount,
-            approvals,
-            status,
-            created_at: env.ledger().timestamp(),
-        };
-        env.storage()
-            .persistent()
-            .set(&DataKey::ThresholdTip(tip_id), &tip);
+        let tok = token::Client::new(&env, &token);
+        tok.transfer(&party_a, &env.current_contract_address(), &deposit_a);
+        tok.transfer(&party_b, &env.current_contract_address(), &deposit_b);
 
         env.events().publish(
-            (symbol_short!("ts_prop"),),
-            (tip_id, policy_id, creator, amount),
+            (symbol_short!("ch_open"),),
+            (party_a, party_b, token, deposit_a + deposit_b),
         );
-        tip_id
     }
 
-    /// Submits a partial signature (approval) for a pending threshold tip.
+    /// Updates the channel's latest agreed balance state.
     ///
-    /// Once the required threshold is reached the tip status becomes `Approved`.
-    /// Emits `("ts_sig",)` with data `(tip_id, signer, approvals_count)`.
-    pub fn submit_partial_sig(env: Env, signer: Address, tip_id: u64) {
+    /// Both parties must authorise. `new_balance_a` is party_a's new balance;
+    /// `nonce` must be strictly greater than the current nonce.
+    ///
+    /// Emits `("ch_upd",)` with data `(party_a, party_b, token, new_balance_a, nonce)`.
+    pub fn update_channel_state(
+        env: Env,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+        new_balance_a: i128,
+        nonce: u64,
+    ) {
         Self::require_not_paused(&env);
-        signer.require_auth();
+        party_a.require_auth();
+        party_b.require_auth();
 
-        let mut tip: threshold_sig::ThresholdTip = env
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
             .storage()
             .persistent()
-            .get(&DataKey::ThresholdTip(tip_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::TipNotFound));
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
 
-        if tip.status != threshold_sig::ThresholdTipStatus::Pending {
-            panic_with_error!(&env, ThresholdError::TipNotPending);
+        if channel.status != payment_channel::ChannelStatus::Open {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
+        }
+        if nonce <= channel.nonce {
+            panic_with_error!(&env, ChannelError::StaleNonce);
+        }
+        if new_balance_a < 0 || new_balance_a > channel.total_deposit {
+            panic_with_error!(&env, ChannelError::InvalidChannelBalance);
         }
 
-        let policy: threshold_sig::ThresholdPolicy = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ThresholdPolicy(tip.policy_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::PolicyNotFound));
-
-        if !threshold_sig::is_signer(&policy.signers, &signer) {
-            panic_with_error!(&env, ThresholdError::NotASigner);
-        }
-        if tip.approvals.contains(&signer) {
-            panic_with_error!(&env, ThresholdError::AlreadySigned);
-        }
-
-        tip.approvals.push_back(signer.clone());
-        let count = tip.approvals.len();
-
-        if threshold_sig::is_approved(&tip, policy.threshold) {
-            tip.status = threshold_sig::ThresholdTipStatus::Approved;
-        }
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::ThresholdTip(tip_id), &tip);
+        channel.balance_a = new_balance_a;
+        channel.nonce = nonce;
+        env.storage().persistent().set(&key, &channel);
 
         env.events().publish(
-            (symbol_short!("ts_sig"),),
-            (tip_id, signer, count),
+            (symbol_short!("ch_upd"),),
+            (party_a, party_b, token, new_balance_a, nonce),
         );
     }
 
-    /// Executes an approved threshold tip, transferring tokens to the creator.
+    /// Cooperatively closes a channel. Both parties must authorise.
     ///
-    /// Any signer may trigger execution once the tip is `Approved`.
-    /// Emits `("ts_exec",)` with data `(tip_id, creator, amount)`.
-    pub fn execute_threshold_tip(env: Env, caller: Address, tip_id: u64) {
+    /// Distributes funds according to the latest agreed state and marks the channel closed.
+    /// Emits `("ch_coop",)` with data `(party_a, party_b, token, balance_a, balance_b)`.
+    pub fn cooperative_close(
+        env: Env,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+    ) {
+        Self::require_not_paused(&env);
+        party_a.require_auth();
+        party_b.require_auth();
+
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
+
+        if channel.status != payment_channel::ChannelStatus::Open {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
+        }
+
+        let bal_a = channel.balance_a;
+        let bal_b = payment_channel::balance_b(&channel);
+
+        channel.status = payment_channel::ChannelStatus::Closed;
+        env.storage().persistent().set(&key, &channel);
+
+        let tok = token::Client::new(&env, &token);
+        if bal_a > 0 {
+            tok.transfer(&env.current_contract_address(), &party_a, &bal_a);
+        }
+        if bal_b > 0 {
+            tok.transfer(&env.current_contract_address(), &party_b, &bal_b);
+        }
+
+        env.events().publish(
+            (symbol_short!("ch_coop"),),
+            (party_a, party_b, token, bal_a, bal_b),
+        );
+    }
+
+    /// Initiates or finalises a unilateral (dispute) close.
+    ///
+    /// **First call** (by either party): sets status to `Disputed` and starts the
+    /// dispute window using the caller's proposed `balance_a` / `nonce`.
+    ///
+    /// **Second call** (by the counterparty, within the window): if the submitted
+    /// `nonce` is strictly higher, the newer state is applied before closing.
+    ///
+    /// **After the window**: anyone may call to finalise the close with the last
+    /// submitted state.
+    ///
+    /// Emits `("ch_disp",)` on initiation and `("ch_fin",)` on finalisation.
+    pub fn dispute_close(
+        env: Env,
+        caller: Address,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+        claimed_balance_a: i128,
+        nonce: u64,
+    ) {
         Self::require_not_paused(&env);
         caller.require_auth();
 
-        let mut tip: threshold_sig::ThresholdTip = env
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
             .storage()
             .persistent()
-            .get(&DataKey::ThresholdTip(tip_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::TipNotFound));
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
 
-        if tip.status == threshold_sig::ThresholdTipStatus::Pending {
-            panic_with_error!(&env, ThresholdError::ThresholdNotMet);
-        }
-        if tip.status != threshold_sig::ThresholdTipStatus::Approved {
-            panic_with_error!(&env, ThresholdError::TipNotPending);
+        if caller != channel.party_a && caller != channel.party_b {
+            panic_with_error!(&env, ChannelError::NotChannelParty);
         }
 
-        let policy: threshold_sig::ThresholdPolicy = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ThresholdPolicy(tip.policy_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::PolicyNotFound));
+        let now = env.ledger().timestamp();
 
-        if !threshold_sig::is_signer(&policy.signers, &caller) {
-            panic_with_error!(&env, ThresholdError::NotASigner);
+        match channel.status {
+            payment_channel::ChannelStatus::Open => {
+                // Initiate dispute
+                if claimed_balance_a < 0 || claimed_balance_a > channel.total_deposit {
+                    panic_with_error!(&env, ChannelError::InvalidChannelBalance);
+                }
+                if nonce < channel.nonce {
+                    panic_with_error!(&env, ChannelError::StaleNonce);
+                }
+                channel.status = payment_channel::ChannelStatus::Disputed;
+                channel.dispute_started_at = now;
+                channel.disputer = Some(caller.clone());
+                channel.balance_a = claimed_balance_a;
+                channel.nonce = nonce;
+                env.storage().persistent().set(&key, &channel);
+
+                env.events().publish(
+                    (symbol_short!("ch_disp"),),
+                    (caller, party_a, party_b, token, claimed_balance_a, nonce),
+                );
+            }
+            payment_channel::ChannelStatus::Disputed => {
+                let window_end = channel.dispute_started_at + channel.dispute_window;
+
+                if now < window_end {
+                    // Counterparty submitting a newer state
+                    if nonce <= channel.nonce {
+                        panic_with_error!(&env, ChannelError::StaleNonce);
+                    }
+                    if claimed_balance_a < 0 || claimed_balance_a > channel.total_deposit {
+                        panic_with_error!(&env, ChannelError::InvalidChannelBalance);
+                    }
+                    channel.balance_a = claimed_balance_a;
+                    channel.nonce = nonce;
+                    env.storage().persistent().set(&key, &channel);
+
+                    env.events().publish(
+                        (symbol_short!("ch_disp"),),
+                        (caller, party_a, party_b, token, claimed_balance_a, nonce),
+                    );
+                } else {
+                    // Window elapsed — finalise
+                    let bal_a = channel.balance_a;
+                    let bal_b = payment_channel::balance_b(&channel);
+
+                    channel.status = payment_channel::ChannelStatus::Closed;
+                    env.storage().persistent().set(&key, &channel);
+
+                    let tok = token::Client::new(&env, &token);
+                    if bal_a > 0 {
+                        tok.transfer(&env.current_contract_address(), &party_a, &bal_a);
+                    }
+                    if bal_b > 0 {
+                        tok.transfer(&env.current_contract_address(), &party_b, &bal_b);
+                    }
+
+                    env.events().publish(
+                        (symbol_short!("ch_fin"),),
+                        (party_a, party_b, token, bal_a, bal_b),
+                    );
+                }
+            }
+            payment_channel::ChannelStatus::Closed => {
+                panic_with_error!(&env, ChannelError::ChannelNotOpen);
+            }
         }
-
-        // CEI: state before external call
-        tip.status = threshold_sig::ThresholdTipStatus::Executed;
-        env.storage()
-            .persistent()
-            .set(&DataKey::ThresholdTip(tip_id), &tip);
-
-        let bal_key = DataKey::CreatorBalance(tip.creator.clone(), tip.token.clone());
-        let bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&bal_key, &(bal + tip.amount));
-
-        let tot_key = DataKey::CreatorTotal(tip.creator.clone(), tip.token.clone());
-        let tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&tot_key, &(tot + tip.amount));
-
-        token::Client::new(&env, &tip.token).transfer(
-            &caller,
-            &env.current_contract_address(),
-            &tip.amount,
-        );
-
-        env.events().publish(
-            (symbol_short!("ts_exec"),),
-            (tip_id, tip.creator, tip.amount),
-        );
     }
 
-    /// Cancels a pending threshold tip. Only the proposer may cancel.
-    ///
-    /// Emits `("ts_cncl",)` with data `tip_id`.
-    pub fn cancel_threshold_tip(env: Env, proposer: Address, tip_id: u64) {
-        Self::require_not_paused(&env);
-        proposer.require_auth();
-
-        let mut tip: threshold_sig::ThresholdTip = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ThresholdTip(tip_id))
-            .unwrap_or_else(|| panic_with_error!(&env, ThresholdError::TipNotFound));
-
-        if tip.proposer != proposer {
-            panic_with_error!(&env, ThresholdError::Unauthorized);
-        }
-        if tip.status != threshold_sig::ThresholdTipStatus::Pending {
-            panic_with_error!(&env, ThresholdError::TipNotPending);
-        }
-
-        tip.status = threshold_sig::ThresholdTipStatus::Cancelled;
-        env.storage()
-            .persistent()
-            .set(&DataKey::ThresholdTip(tip_id), &tip);
-
-        env.events().publish((symbol_short!("ts_cncl"),), tip_id);
-    }
-
-    /// Returns a threshold policy by ID.
-    pub fn get_threshold_policy(
+    /// Returns the payment channel between `party_a`, `party_b`, and `token`.
+    pub fn get_channel(
         env: Env,
-        policy_id: u64,
-    ) -> Option<threshold_sig::ThresholdPolicy> {
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+    ) -> Option<payment_channel::PaymentChannel> {
         env.storage()
             .persistent()
-            .get(&DataKey::ThresholdPolicy(policy_id))
-    }
-
-    /// Returns a threshold tip by ID.
-    pub fn get_threshold_tip(env: Env, tip_id: u64) -> Option<threshold_sig::ThresholdTip> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::ThresholdTip(tip_id))
+            .get(&DataKey::PaymentChannel(party_a, party_b, token))
     }
 }
 

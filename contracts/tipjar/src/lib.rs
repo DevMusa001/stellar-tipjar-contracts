@@ -94,6 +94,9 @@ pub mod meta_tx;
 // Commit-reveal scheme for fair auctions and voting
 pub mod commit_reveal;
 
+// Zero-knowledge proofs for private tip verification
+pub mod zk_proof;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -884,6 +887,26 @@ pub enum DataKey {
     CommitRevealCreatorRounds(Address),
     /// Global commit-reveal round counter.
     CommitRevealCounter,
+    /// ZK circuit verification key keyed by circuit ID.
+    ZkCircuit(u64),
+    /// ZK proof keyed by proof ID.
+    ZkProof(u64),
+    /// Private tip with ZK proof keyed by tip ID.
+    ZkPrivateTip(u64),
+    /// Nullifier used flag keyed by nullifier hash.
+    ZkNullifier(BytesN<32>),
+    /// List of circuit IDs owned by an address.
+    ZkOwnerCircuits(Address),
+    /// List of proof IDs submitted by a prover.
+    ZkProverProofs(Address),
+    /// List of private tip IDs for a creator.
+    ZkCreatorPrivateTips(Address),
+    /// Global ZK circuit counter.
+    ZkCircuitCounter,
+    /// Global ZK proof counter.
+    ZkProofCounter,
+    /// Global ZK private tip counter.
+    ZkPrivateTipCounter,
 }
 
 #[contracterror]
@@ -1286,6 +1309,39 @@ pub enum CommitRevealError {
     RevealPhaseNotEnded = 513,
     /// Commit phase has not ended yet.
     CommitPhaseNotEnded = 514,
+}
+
+/// Errors for zero-knowledge proof operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ZkProofError {
+    /// Circuit not found.
+    CircuitNotFound = 600,
+    /// Circuit is not active.
+    CircuitNotActive = 601,
+    /// Proof not found.
+    ProofNotFound = 602,
+    /// Proof data exceeds maximum size.
+    ProofTooLarge = 603,
+    /// Too many public inputs.
+    TooManyPublicInputs = 604,
+    /// Nullifier has already been used.
+    NullifierUsed = 605,
+    /// Proof is not in pending status.
+    ProofNotPending = 606,
+    /// Proof has not been verified.
+    ProofNotVerified = 607,
+    /// Nullifier mismatch.
+    NullifierMismatch = 608,
+    /// Private tip not found.
+    PrivateTipNotFound = 609,
+    /// Private tip already claimed.
+    AlreadyClaimed = 610,
+    /// Caller is not the circuit owner.
+    NotCircuitOwner = 611,
+    /// Caller is not the tip creator.
+    NotTipCreator = 612,
 }
 
 #[contract]
@@ -9466,6 +9522,229 @@ a
     /// Returns all round IDs created by a creator.
     pub fn get_creator_commit_reveal_rounds(env: Env, creator: Address) -> Vec<u64> {
         commit_reveal::get_creator_rounds(&env, &creator)
+    }
+
+    // ── zero-knowledge proofs (private tip verification) ─────────────────────
+
+    /// Registers a new ZK circuit verification key.
+    ///
+    /// Returns the circuit ID.
+    /// Emits `("zk_reg",)` with `(circuit_id, owner, vk_hash)`.
+    pub fn register_zk_circuit(
+        env: Env,
+        owner: Address,
+        circuit_type: zk_proof::CircuitType,
+        vk_hash: BytesN<32>,
+        description: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        zk_proof::register_circuit(&env, &owner, circuit_type, vk_hash, description)
+    }
+
+    /// Deactivates a ZK circuit. Owner only.
+    ///
+    /// Emits `("zk_deact",)` with `(circuit_id)`.
+    pub fn deactivate_zk_circuit(env: Env, owner: Address, circuit_id: u64) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if circuit.owner != owner {
+            panic_with_error!(&env, ZkProofError::NotCircuitOwner);
+        }
+
+        zk_proof::deactivate_circuit(&env, circuit_id);
+    }
+
+    /// Submits a zero-knowledge proof for verification.
+    ///
+    /// Returns the proof ID.
+    /// Emits `("zk_sub",)` with `(proof_id, prover, circuit_id, nullifier)`.
+    pub fn submit_zk_proof(
+        env: Env,
+        prover: Address,
+        circuit_id: u64,
+        proof_data: Bytes,
+        public_inputs: Vec<BytesN<32>>,
+        private_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+        metadata: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        prover.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if !circuit.active {
+            panic_with_error!(&env, ZkProofError::CircuitNotActive);
+        }
+
+        if proof_data.len() > zk_proof::MAX_PROOF_SIZE {
+            panic_with_error!(&env, ZkProofError::ProofTooLarge);
+        }
+
+        if public_inputs.len() > zk_proof::MAX_PUBLIC_INPUTS {
+            panic_with_error!(&env, ZkProofError::TooManyPublicInputs);
+        }
+
+        let nullifier_key = DataKey::ZkNullifier(nullifier.clone());
+        if env.storage().persistent().get(&nullifier_key).unwrap_or(false) {
+            panic_with_error!(&env, ZkProofError::NullifierUsed);
+        }
+
+        zk_proof::submit_proof(
+            &env,
+            &prover,
+            circuit_id,
+            proof_data,
+            public_inputs,
+            private_commitment,
+            nullifier,
+            metadata,
+        )
+    }
+
+    /// Verifies a submitted ZK proof. Admin only.
+    ///
+    /// In production, this would call a ZK verifier. For this implementation,
+    /// the admin manually marks proofs as valid/invalid.
+    /// Emits `("zk_ver",)` with `(proof_id, is_valid)`.
+    pub fn verify_zk_proof(env: Env, admin: Address, proof_id: u64, is_valid: bool) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Pending {
+            panic_with_error!(&env, ZkProofError::ProofNotPending);
+        }
+
+        zk_proof::verify_proof(&env, proof_id, is_valid);
+    }
+
+    /// Revokes a ZK proof. Admin only.
+    ///
+    /// Emits `("zk_rvk",)` with `(proof_id)`.
+    pub fn revoke_zk_proof(env: Env, admin: Address, proof_id: u64) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+
+        zk_proof::revoke_proof(&env, proof_id);
+    }
+
+    /// Creates a private tip using a ZK proof.
+    ///
+    /// Returns the private tip ID.
+    /// Emits `("zk_ptip",)` with `(tip_id, creator, proof_id)`.
+    pub fn create_zk_private_tip(
+        env: Env,
+        creator: Address,
+        proof_id: u64,
+        amount_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Verified {
+            panic_with_error!(&env, ZkProofError::ProofNotVerified);
+        }
+
+        if proof.nullifier != nullifier {
+            panic_with_error!(&env, ZkProofError::NullifierMismatch);
+        }
+
+        zk_proof::create_private_tip(&env, &creator, proof_id, amount_commitment, nullifier)
+    }
+
+    /// Claims/reveals a private tip. Creator only.
+    ///
+    /// Emits `("zk_clm",)` with `(tip_id, creator)`.
+    pub fn claim_zk_private_tip(env: Env, creator: Address, tip_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let tip = zk_proof::get_private_tip(&env, tip_id);
+        if tip.is_none() {
+            panic_with_error!(&env, ZkProofError::PrivateTipNotFound);
+        }
+        let tip = tip.unwrap();
+
+        if tip.creator != creator {
+            panic_with_error!(&env, ZkProofError::NotTipCreator);
+        }
+
+        if tip.claimed {
+            panic_with_error!(&env, ZkProofError::AlreadyClaimed);
+        }
+
+        zk_proof::claim_private_tip(&env, tip_id);
+    }
+
+    /// Returns a ZK circuit by ID.
+    pub fn get_zk_circuit(env: Env, circuit_id: u64) -> Option<zk_proof::VerificationKey> {
+        zk_proof::get_circuit(&env, circuit_id)
+    }
+
+    /// Returns a ZK proof by ID.
+    pub fn get_zk_proof(env: Env, proof_id: u64) -> Option<zk_proof::ZkProof> {
+        zk_proof::get_proof(&env, proof_id)
+    }
+
+    /// Returns a private tip by ID.
+    pub fn get_zk_private_tip(env: Env, tip_id: u64) -> Option<zk_proof::PrivateTipProof> {
+        zk_proof::get_private_tip(&env, tip_id)
+    }
+
+    /// Returns all circuit IDs owned by an address.
+    pub fn get_owner_zk_circuits(env: Env, owner: Address) -> Vec<u64> {
+        zk_proof::get_owner_circuits(&env, &owner)
+    }
+
+    /// Returns all proof IDs submitted by a prover.
+    pub fn get_prover_zk_proofs(env: Env, prover: Address) -> Vec<u64> {
+        zk_proof::get_prover_proofs(&env, &prover)
+    }
+
+    /// Returns all private tip IDs for a creator.
+    pub fn get_creator_zk_private_tips(env: Env, creator: Address) -> Vec<u64> {
+        zk_proof::get_creator_private_tips(&env, &creator)
     }
 
     // ── optimistic rollup ────────────────────────────────────────────────────

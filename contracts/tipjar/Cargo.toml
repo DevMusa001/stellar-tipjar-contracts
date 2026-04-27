@@ -82,3 +82,7 @@ path = "tests/quadratic_funding_tests.rs"
 name = "poly_commit_tests"
 path = "tests/poly_commit_tests.rs"
 
+[[test]]
+name = "sidechain_tests"
+path = "tests/sidechain_tests.rs"
+

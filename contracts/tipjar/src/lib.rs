@@ -12,6 +12,9 @@ pub mod synthetic;
 /// Polynomial commitment scheme for efficient tip data verification.
 pub mod poly_commit;
 
+/// Sidechain integration for scalable tip processing.
+pub mod sidechain;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     token, Address, BytesN, Env, Map, String, Vec,
@@ -838,6 +841,20 @@ pub enum DataKey {
     EncryptedTipCounter,
     /// Nullifier for encrypted tips (prevents double-spend).
     PrivacyNullifier(BytesN<32>),
+    /// Sidechain operator address.
+    SidechainOperator,
+    /// Sidechain feature enabled flag.
+    SidechainEnabled,
+    /// Latest finalized checkpoint sequence number.
+    SidechainLatestCheckpoint,
+    /// Checkpoint record keyed by sequence number.
+    SidechainCheckpoint(u64),
+    /// Pending tip batch keyed by batch ID.
+    SidechainBatch(u64),
+    /// Global sidechain batch counter.
+    SidechainBatchCounter,
+    /// Finalized sidechain tip total per (creator, token).
+    SidechainFinalizedTotal(Address, Address),
 }
 
 #[contracterror]
@@ -1087,6 +1104,22 @@ pub enum CreditError {
     AmmInsufficientLiquidity = 141,
     /// Provider has insufficient LP shares.
     AmmInsufficientShares = 142,
+    /// Sidechain feature is not initialized.
+    SidechainNotInitialized = 143,
+    /// Sidechain feature is disabled.
+    SidechainDisabled = 144,
+    /// Caller is not the sidechain operator.
+    SidechainUnauthorized = 145,
+    /// Checkpoint with this sequence number was not found.
+    SidechainCheckpointNotFound = 146,
+    /// Checkpoint has already been finalized.
+    SidechainAlreadyFinalized = 147,
+    /// Tip batch was not found.
+    SidechainBatchNotFound = 148,
+    /// Tip batch has already been settled.
+    SidechainBatchAlreadySettled = 149,
+    /// Checkpoint must be finalized before settling batches.
+    SidechainCheckpointNotFinalized = 150,
 }
 
 #[contracterror]
@@ -8444,6 +8477,125 @@ a
     /// Get proposal threshold adjusted by voter's conviction.
     pub fn get_adjusted_proposal_threshold(env: Env, voter: Address) -> i128 {
         governance::conviction_integration::get_adjusted_proposal_threshold(&env, &voter)
+    }
+
+    // ── sidechain integration ────────────────────────────────────────────────
+
+    /// Initialize the sidechain feature with a designated operator.
+    ///
+    /// Admin only. The operator is the only address permitted to submit and
+    /// finalize checkpoints. Emits `("sc_init",)`.
+    pub fn init_sidechain(env: Env, admin: Address, operator: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::SidechainOperator, &operator);
+        env.storage()
+            .instance()
+            .set(&DataKey::SidechainEnabled, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::SidechainLatestCheckpoint, &0u64);
+        env.events().publish((symbol_short!("sc_init"),), operator);
+    }
+
+    /// Submit a new checkpoint anchoring sidechain state on the main chain.
+    ///
+    /// Operator only. Returns the new checkpoint sequence number.
+    pub fn submit_checkpoint(
+        env: Env,
+        operator: Address,
+        state_root: BytesN<32>,
+        tip_count: u32,
+        total_volume: i128,
+    ) -> u64 {
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::SidechainEnabled)
+            .unwrap_or(false);
+        if !enabled {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        sidechain::checkpoint::submit_checkpoint(&env, &operator, state_root, tip_count, total_volume)
+    }
+
+    /// Finalize a checkpoint, enabling batch settlement against it.
+    ///
+    /// Operator only.
+    pub fn finalize_checkpoint(env: Env, operator: Address, seq: u64) {
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::SidechainEnabled)
+            .unwrap_or(false);
+        if !enabled {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        sidechain::checkpoint::finalize_checkpoint(&env, &operator, seq);
+    }
+
+    /// Record a pending tip batch linked to a checkpoint.
+    ///
+    /// Operator only. Returns the new batch ID.
+    pub fn record_tip_batch(
+        env: Env,
+        operator: Address,
+        creator: Address,
+        token: Address,
+        total_amount: i128,
+        tip_count: u32,
+        checkpoint_seq: u64,
+    ) -> u64 {
+        operator.require_auth();
+        let stored_op: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SidechainOperator);
+        let stored_op = match stored_op {
+            Some(op) => op,
+            None => panic_with_error!(&env, TipJarError::Unauthorized),
+        };
+        if operator != stored_op {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if total_amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        sidechain::checkpoint::record_tip_batch(
+            &env,
+            creator,
+            token,
+            total_amount,
+            tip_count,
+            checkpoint_seq,
+        )
+    }
+
+    /// Settle a pending tip batch into the creator's on-chain balance.
+    ///
+    /// Requires the linked checkpoint to be finalized. Anyone may call this.
+    pub fn finalize_tips(env: Env, batch_id: u64) {
+        sidechain::checkpoint::settle_batch(&env, batch_id);
+    }
+
+    /// Returns the current sidechain state summary.
+    pub fn get_sidechain_state(env: Env) -> sidechain::SidechainState {
+        sidechain::state::get_state(&env)
+    }
+
+    /// Returns the finalized sidechain tip total for a creator/token pair.
+    pub fn get_sidechain_finalized_total(env: Env, creator: Address, token: Address) -> i128 {
+        sidechain::state::get_finalized_total(&env, &creator, &token)
+    }
+
+    /// Returns a specific checkpoint by sequence number.
+    pub fn get_checkpoint(env: Env, seq: u64) -> Option<sidechain::Checkpoint> {
+        sidechain::state::get_checkpoint(&env, seq)
     }
 }
 

@@ -86,3 +86,7 @@ path = "tests/poly_commit_tests.rs"
 name = "payment_channel_tests"
 path = "tests/payment_channel_tests.rs"
 
+[[test]]
+name = "rollup_tests"
+path = "tests/rollup_tests.rs"
+

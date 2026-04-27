@@ -67,6 +67,9 @@ pub mod index_fund;
 // Bonding curves
 pub mod bonding_curve;
 
+// Quadratic funding
+pub mod quadratic_funding;
+
 // TWAP oracle
 pub mod twap_oracle;
 
@@ -8214,6 +8217,91 @@ a
     /// Get LP share value as `(token_a_per_share, token_b_per_share)` × 1_000_000.
     pub fn amm_share_value(env: Env, pool_id: u64) -> (i128, i128) {
         amm::pricing::share_value(&env, pool_id)
+    }
+
+    // ── Quadratic Funding ─────────────────────────────────────────────────────
+
+    /// Creates a new quadratic funding round.
+    ///
+    /// `admin` deposits `matching_pool` tokens immediately into escrow.
+    /// The round accepts contributions for `duration_seconds` seconds.
+    /// Returns the new round ID.
+    ///
+    /// Emits `("qf_new",)` with data `(round_id, admin, token, matching_pool)`.
+    pub fn qf_create_round(
+        env: Env,
+        admin: Address,
+        token: Address,
+        matching_pool: i128,
+        duration_seconds: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+        quadratic_funding::create_round(&env, &admin, &token, matching_pool, duration_seconds)
+    }
+
+    /// Contributes `amount` of the round's token to `project` in `round_id`.
+    ///
+    /// Each address may contribute at most once per project per round (Sybil resistance).
+    /// Emits `("qf_con",)` with data `(round_id, contributor, project, amount)`.
+    pub fn qf_contribute(
+        env: Env,
+        contributor: Address,
+        round_id: u64,
+        project: Address,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        contributor.require_auth();
+        quadratic_funding::contribute(&env, &contributor, round_id, &project, amount);
+    }
+
+    /// Finalizes a round after its end time. Admin only.
+    ///
+    /// Emits `("qf_fin",)` with data `(round_id,)`.
+    pub fn qf_finalize_round(env: Env, admin: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        quadratic_funding::finalize_round(&env, &admin, round_id);
+    }
+
+    /// Distributes matching funds to projects and returns contributions to donors.
+    ///
+    /// Uses the quadratic formula: each project's share ∝ (Σ√contribution_i)².
+    /// Admin only; round must be Finalized.
+    /// Emits `("qf_dist",)` per project and `("qf_done",)` on completion.
+    pub fn qf_distribute_matching(env: Env, admin: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        quadratic_funding::distribute_matching(&env, &admin, round_id);
+    }
+
+    /// Returns the funding round record, or `None` if not found.
+    pub fn qf_get_round(env: Env, round_id: u64) -> Option<quadratic_funding::FundingRound> {
+        quadratic_funding::get_round(&env, round_id)
+    }
+
+    /// Returns the contribution record for a specific contributor/project/round.
+    pub fn qf_get_contribution(
+        env: Env,
+        round_id: u64,
+        project: Address,
+        contributor: Address,
+    ) -> Option<quadratic_funding::Contribution> {
+        quadratic_funding::get_contribution(&env, round_id, &project, &contributor)
+    }
+
+    /// Returns the estimated matching amount for `project` in `round_id`.
+    pub fn qf_get_match_estimate(env: Env, round_id: u64, project: Address) -> i128 {
+        quadratic_funding::get_match_estimate(&env, round_id, &project)
     }
 }
 

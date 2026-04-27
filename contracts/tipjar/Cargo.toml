@@ -78,3 +78,7 @@ path = "tests/twap_oracle_tests.rs"
 name = "quadratic_funding_tests"
 path = "tests/quadratic_funding_tests.rs"
 
+[[test]]
+name = "poly_commit_tests"
+path = "tests/poly_commit_tests.rs"
+

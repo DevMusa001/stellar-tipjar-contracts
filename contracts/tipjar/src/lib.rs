@@ -824,6 +824,20 @@ pub enum DataKey {
     AmmLpShares(u64, Address),
     /// Fee-per-share debt snapshot keyed by (pool_id, provider).
     AmmProviderDebt(u64, Address),
+    /// Homomorphic encryption configuration.
+    HomomorphicConfig,
+    /// Key management configuration for homomorphic encryption.
+    KeyManagementConfig,
+    /// History of public keys for homomorphic encryption.
+    KeyHistory,
+    /// Encrypted balance keyed by (creator, token).
+    EncryptedBalance(Address, Address),
+    /// Encrypted tip record keyed by tip_id.
+    EncryptedTip(u64),
+    /// Global counter for encrypted tip IDs.
+    EncryptedTipCounter,
+    /// Nullifier for encrypted tips (prevents double-spend).
+    PrivacyNullifier(BytesN<32>),
 }
 
 #[contracterror]
@@ -840,6 +854,8 @@ pub enum TipJarError {
     InvalidGoalAmount = 8,
     Unauthorized = 9,
     RoleNotFound = 10,
+    InsufficientBalance = 11,
+    AmountTooSmall = 12,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -1986,6 +2002,37 @@ impl TipJarContract {
         }
         Self::check_and_update_withdrawal_limits(&env, &creator, amount);
         env.storage().persistent().set(&bal_key, &0i128);
+        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &creator, &amount);
+        events::emit_withdraw_event(&env, &creator, amount, &token);
+    }
+
+    /// Withdraws a specific amount from the escrowed balance for `creator` in `token`.
+    ///
+    /// Validates amount is at least the minimum (1 token = 1_0000000 stroops) and does not exceed available balance.
+    /// Enforces per-creator (or default) daily limits and cooldown periods.
+    /// Emits `("withdraw", creator)` with data `amount`.
+    pub fn withdraw_amount(env: Env, creator: Address, token: Address, amount: i128) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        const MIN_WITHDRAWAL: i128 = 1_0000000;
+        if amount < MIN_WITHDRAWAL {
+            panic_with_error!(&env, TipJarError::AmountTooSmall);
+        }
+
+        let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
+        let current_balance: i128 = env.storage().persistent().get(&bal_key)
+            .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+
+        if amount > current_balance {
+            panic_with_error!(&env, TipJarError::InsufficientBalance);
+        }
+
+        Self::check_and_update_withdrawal_limits(&env, &creator, amount);
+
+        let new_balance = current_balance - amount;
+        env.storage().persistent().set(&bal_key, &new_balance);
+
         token::Client::new(&env, &token).transfer(&env.current_contract_address(), &creator, &amount);
         events::emit_withdraw_event(&env, &creator, amount, &token);
     }

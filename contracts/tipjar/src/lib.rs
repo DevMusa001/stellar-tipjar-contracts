@@ -52,6 +52,15 @@ pub mod privacy_tip;
 // Options trading
 pub mod options;
 
+// Tip Index Funds
+pub mod index_fund;
+
+// Bonding curves
+pub mod bonding_curve;
+
+// TWAP oracle
+pub mod twap_oracle;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,6 +145,33 @@ pub struct BatchTip {
     pub creator: Address,
     pub token: Address,
     pub amount: i128,
+}
+
+/// A single tip operation used in `batch_tip_v2`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TipOperation {
+    pub creator: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// A single withdrawal operation used in `batch_withdraw`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WithdrawOperation {
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Result for a single operation within a batch call.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchResult {
+    /// Whether this individual operation succeeded.
+    pub success: bool,
+    /// Zero-based index of this operation in the input vector.
+    pub index: u32,
 }
 
 #[contracttype]
@@ -603,6 +639,16 @@ pub enum DataKey {
     Subscription(Address, Address),
     /// Human-readable reason stored when the contract is paused.
     PauseReason,
+    /// Optional timestamp (unix seconds) after which the contract auto-unpauses.
+    PauseUntil,
+    /// TipMetadata keyed by (creator, tip_index).
+    TipHistory(Address, u64),
+    /// Total number of tips with metadata stored for a creator.
+    TipCount(Address),
+    /// Platform fee in basis points (u32).
+    FeeBasisPoints,
+    /// Accumulated platform fee balance per token.
+    PlatformFeeBalance(Address),
     /// Refund window in seconds (u64).
     RefundWindow,
     /// Leaderboard related keys.
@@ -629,218 +675,90 @@ pub enum DataKey {
     Auction(AuctionKey),
     /// Time-lock record keyed by lock ID.
     TimeLock(u64),
-    /// Multi-sig related keys.
-    MultiSig(MultiSigKey),
-    /// Dispute related keys.
-    Dispute(DisputeKey),
-    /// Private tip related keys.
-    PrivateTip(PrivateTipKey),
-    /// Insurance related keys.
-    Insurance(InsuranceKey),
-    /// Option related keys.
-    Option(OptionKey),
-    /// Bridge related keys.
-    Bridge(BridgeKey),
-    /// Synthetic related keys.
-    Synthetic(SyntheticKey),
-    /// Circuit breaker related keys.
-    CircuitBreaker(CircuitBreakerKey),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum VestingKey {
-    Schedule(u64),
-    CreatorSchedules(Address, u64),
-    CreatorList(Address),
-    Ctr,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StreamKey {
-    Record(u64),
-    CreatorStreams(Address),
-    SenderStreams(Address),
-    Ctr,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AuctionKey {
-    Ctr,
-    Record(u64),
-    CreatorList(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MultiSigKey {
-    Request(u64),
-    Ctr,
-    Config,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DisputeKey {
-    Record(u64),
-    Ctr,
-    CreatorList(Address),
-    Evidence(u64, u64),
-    EvidenceCtr(u64),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PrivateTipKey {
-    Record(u64),
-    Ctr,
-    Amount(u64),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InsuranceKey {
-    Cfg,
-    Token(Address),
-    Claim(u64),
-    Ctr,
-    Contrib(Address, Address),
-    LastClm(Address, Address),
-    ActiveClms(Address, Address),
-    TotalClms(Address, Address),
-    Enabled,
-    MaxClms,
-    Admin,
-    Clms(Address, Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OptionKey {
-    Record(u64),
-    Ctr,
-    Written(Address),
-    Held(Address),
-    Position(Address),
-    PricingParams,
-    Active,
-    Collateral(Address, Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum BridgeKey {
-    Relayer,
-    Token,
-    Enabled,
-    FeeBps,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MilestoneKey {
-    Counter(Address),
-    Record(Address, u64),
-    Active(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RoleKey {
-    User(Address),
-    Members(Role),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StatsKey {
-    TipperAgg(Address, u32),
-    CreatorAgg(Address, u32),
-    TipperParts(u32),
-    CreatorParts(u32),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LockedTipKey {
-    Record(Address, u64),
-    Ctr(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MatchingKey {
-    Ctr,
-    Program(u64),
-    CreatorProgs(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TipKey {
-    Record(u64),
-    Ctr,
-    History(Address, u64),
-    Count(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FeeKey {
-    BasisPoints,
-    Balance(Address),
-    CurrentDynamic,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SnapshotKey {
-    Record(u64),
-    Ctr,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LimitKey {
-    Withdrawal(Address),
-    Default,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DelegationKey {
-    Active(Address, Address),
-    List(Address),
-    History(Address),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SyntheticKey {
-    Asset(u64),
-    Ctr,
-    CreatorAssets(Address),
-    Collateral(Address, Address),
-    Balance(Address, u64),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum CircuitBreakerKey {
-    /// Legacy configuration (deprecated)
-    Config,
-    /// Legacy state (deprecated)
-    State,
-    /// Legacy cooldown (deprecated)
-    Cooldown(Address),
-    /// Enhanced configuration
-    EnhancedConfig,
-    /// Creator-specific overrides
-    CreatorOverrides(Address),
-    /// Token-specific limits
-    TokenLimits(Address),
+    /// Multi-sig withdrawal request keyed by request ID.
+    MultiSigRequest(u64),
+    /// Global counter for multi-sig request IDs.
+    MultiSigCounter,
+    /// Multi-sig configuration (threshold, signers, required approvals).
+    MultiSigConfig,
+    /// Dispute record keyed by dispute_id.
+    Dispute(u64),
+    /// Global counter for dispute IDs.
+    DisputeCounter,
+    /// List of dispute IDs for a creator.
+    CreatorDisputes(Address),
+    /// Evidence records keyed by (dispute_id, evidence_index).
+    DisputeEvidence(u64, u64),
+    /// Evidence counter for a dispute.
+    DisputeEvidenceCounter(u64),
+    /// Private tip record keyed by tip_id.
+    PrivateTip(u64),
+    /// Global counter for private tip IDs.
+    PrivateTipCounter,
+    /// Revealed amount for a private tip keyed by tip_id.
+    PrivateTipAmount(u64),
+    /// Insurance pool configuration.
+    InsPoolCfg,
+    /// Insurance pool state per token.
+    InsPoolToken(Address),
+    /// Insurance claim record keyed by claim ID.
+    InsClaim(u64),
+    /// Global counter for insurance claim IDs.
+    InsClaimCtr,
+    /// Creator's insurance contribution per token.
+    InsContrib(Address, Address),
+    /// Creator's last claim timestamp per token.
+    InsLastClm(Address, Address),
+    /// Creator's active claim count per token.
+    InsActiveClms(Address, Address),
+    /// Total number of claims for a creator per token.
+    InsTotalClms(Address, Address),
+    /// Insurance feature enabled flag.
+    InsEnabled,
+    /// Max active claims per creator.
+    InsMaxClms,
+    /// Insurance admin address.
+    InsAdmin,
+    /// List of claim IDs for a creator per token.
+    InsClms(Address, Address),
+    /// Option contract by ID.
+    Option(u64),
+    /// Option counter for ID generation.
+    OptionCounter,
+    /// Options written by address.
+    WrittenOptions(Address),
+    /// Options held by address.
+    HeldOptions(Address),
+    /// Option position tracking for address.
+    OptionPosition(Address),
+    /// Option pricing parameters.
+    OptionPricingParams,
+    /// Active options list.
+    ActiveOptions,
+    /// Collateral locked per token per address for options.
+    OptionCollateral(Address, Address),
+    /// Bridge relayer address.
+    BridgeRelayer,
+    /// Bridge token address.
+    BridgeToken,
+    /// Bridge enabled flag.
+    BridgeEnabled,
+    /// Bridge fee in basis points.
+    BridgeFeeBps,
+    /// Index fund record by ID.
+    IndexFund(u64),
+    /// Global index fund counter.
+    IndexFundCounter,
+    /// User share position in a fund keyed by (fund_id, holder).
+    IndexFundShare(u64, Address),
+    /// Creator allocation within a fund keyed by (fund_id, creator).
+    IndexCreatorAlloc(u64, Address),
+    /// TWAP oracle config and state keyed by oracle_id.
+    TwapOracle(u64),
+    /// Individual ring-buffer observation keyed by (oracle_id, slot_index).
+    TwapObservation(u64, u32),
+    /// Global TWAP oracle ID counter.
+    TwapOracleCounter,
 }
 
 #[contracterror]
@@ -998,16 +916,32 @@ pub enum CreditError {
     InvalidOptionParams = 95,
     OptionNotExpired = 96,
     InvalidBridgeFee = 97,
-    SyntheticAssetNotFound = 98,
-    SyntheticAssetInactive = 99,
-    InvalidCollateralizationRatio = 100,
-    CollateralizationViolation = 101,
-    TokenNotInPool = 102,
-    InsufficientPoolBalance = 103,
-    CircuitBreakerHalted = 104,
-    InvalidCircuitBreakerConfig = 105,
-    // Enhanced circuit breaker errors
-    EnhancedCircuitBreakerError = 106,
+    /// Index fund not found.
+    IndexFundNotFound = 98,
+    /// Index fund is not active.
+    IndexFundNotActive = 99,
+    /// Component weights do not sum to 10000 bps.
+    InvalidIndexWeights = 100,
+    /// Index fund requires at least 2 creators.
+    IndexFundTooFewCreators = 101,
+    /// Insufficient fund shares for withdrawal.
+    InsufficientFundShares = 102,
+    /// Deposit amount is below the minimum.
+    IndexDepositTooSmall = 103,
+    /// Attempted to unpause a contract that is not currently paused.
+    NotPaused = 104,
+    /// TWAP oracle not found.
+    TwapOracleNotFound = 105,
+    /// TWAP oracle is inactive.
+    TwapOracleInactive = 106,
+    /// TWAP price update is too frequent (below MIN_UPDATE_INTERVAL).
+    TwapUpdateTooFrequent = 107,
+    /// TWAP observation window is outside the allowed range.
+    TwapInvalidWindow = 108,
+    /// TWAP oracle parameters (e.g. capacity) are invalid.
+    TwapInvalidParams = 109,
+    /// TWAP price value is invalid (must be > 0).
+    TwapInvalidPrice = 110,
 }
 
 #[contracterror]
@@ -1032,90 +966,36 @@ impl TipJarContract {
     // ── pause guard ──────────────────────────────────────────────────────────
 
     fn require_not_paused(env: &Env) {
-        if env
+        if Self::check_is_paused(env) {
+            panic_with_error!(env, TipJarError::ContractPaused);
+        }
+    }
+
+    /// Core pause check: returns true if the contract is currently paused.
+    /// Handles auto-unpause by clearing pause state when `PauseUntil` has elapsed.
+    fn check_is_paused(env: &Env) -> bool {
+        let paused: bool = env
             .storage()
             .instance()
             .get::<DataKey, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            panic_with_error!(env, FeatureError::ContractPaused);
+            .unwrap_or(false);
+        if !paused {
+            return false;
         }
-
-        if let Some(state) = env
+        // Check auto-unpause
+        if let Some(unpause_time) = env
             .storage()
             .instance()
-            .get::<DataKey, CircuitBreakerState>(&DataKey::CircuitBreaker(CircuitBreakerKey::State))
+            .get::<DataKey, u64>(&DataKey::PauseUntil)
         {
-            if state.halted_until > env.ledger().timestamp() {
-                panic_with_error!(env, SystemError::CircuitBreakerHalted);
+            if env.ledger().timestamp() >= unpause_time {
+                env.storage().instance().set(&DataKey::Paused, &false);
+                env.storage().instance().remove(&DataKey::PauseReason);
+                env.storage().instance().remove(&DataKey::PauseUntil);
+                return false;
             }
         }
-    }
-
-    fn check_circuit_breaker(env: &Env, amount: i128) {
-        let config = match env
-            .storage()
-            .instance()
-            .get::<DataKey, CircuitBreakerConfig>(&DataKey::CircuitBreaker(CircuitBreakerKey::Cfg))
-        {
-            Some(c) => c,
-            None => return,
-        };
-
-        if !config.enabled {
-            return;
-        }
-
-        let mut state = env
-            .storage()
-            .instance()
-            .get::<DataKey, CircuitBreakerState>(&DataKey::CircuitBreaker(CircuitBreakerKey::State))
-            .unwrap_or(CircuitBreakerState {
-                window_start: env.ledger().timestamp(),
-                current_volume: 0,
-                halted_until: 0,
-                trigger_count: 0,
-            });
-
-        let now = env.ledger().timestamp();
-
-        // 1. Check for individual tip spike
-        if amount > config.max_single_tip {
-            Self::trigger_breaker(env, &mut state, &config, symbol_short!("spike"));
-            return;
-        }
-
-        // 2. Check for volume spike in window
-        if now >= state.window_start.saturating_add(config.window_seconds) {
-            // New window
-            state.window_start = now;
-            state.current_volume = amount;
-        } else {
-            state.current_volume = state.current_volume.saturating_add(amount);
-            if state.current_volume > config.max_volume_window {
-                Self::trigger_breaker(env, &mut state, &config, symbol_short!("volume"));
-                return;
-            }
-        }
-
-        Self::update_breaker_state(env, &state);
-    }
-
-    fn trigger_breaker(
-        env: &Env,
-        state: &mut CircuitBreakerState,
-        config: &CircuitBreakerConfig,
-        reason: soroban_sdk::Symbol,
-    ) {
-        let now = env.ledger().timestamp();
-        state.halted_until = now.saturating_add(config.cooldown_seconds);
-        state.trigger_count = state.trigger_count.saturating_add(1);
-        Self::update_breaker_state(env, state);
-
-        env.events().publish(
-            (symbol_short!("cb_trig"), reason),
-            (state.halted_until, state.trigger_count),
-        );
+        true
     }
 
     fn update_breaker_state(env: &Env, state: &CircuitBreakerState) {
@@ -1545,53 +1425,65 @@ impl TipJarContract {
         env.events().publish((symbol_short!("cb_init"),), admin);
     }
 
-    /// Sets creator-specific circuit breaker limits. Admin only.
-    /// 
-    /// Stores creator-specific limits separately from main configuration.
-    /// Emits `("creator_cb_limit",)` with data `(creator, limit)`.
-    pub fn set_creator_cb_limit(
-        env: Env,
-        admin: Address,
-        creator: Address,
-        limit: i128,
-    ) {
+    /// Pauses all state-changing operations. Admin only.
+    ///
+    /// `reason` is stored on-chain for transparency.
+    /// `duration_seconds` optionally sets an auto-unpause time; pass `None` for indefinite pause.
+    /// Emits `("paused",)` with data `(admin, reason, unpause_time_or_zero)`.
+    pub fn pause(env: Env, admin: Address, reason: String, duration_seconds: Option<u64>) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-
-        if limit <= 0 {
-            panic_with_error!(&env, CreditError::EnhancedCircuitBreakerError);
-        }
-
-        // Store creator-specific limit separately
-        env.storage()
-            .persistent()
-            .set(&DataKey::CircuitBreaker(CircuitBreakerKey::CreatorOverrides(creator.clone())), &limit);
-
-        env.events().publish(
-            (symbol_short!("cr_cb_lmt"),), 
-            (creator, limit)
-        );
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::PauseReason, &reason);
+        let unpause_time: u64 = if let Some(duration) = duration_seconds {
+            let t = env.ledger().timestamp().saturating_add(duration);
+            env.storage().instance().set(&DataKey::PauseUntil, &t);
+            t
+        } else {
+            env.storage().instance().remove(&DataKey::PauseUntil);
+            0
+        };
+        env.events()
+            .publish((symbol_short!("paused"),), (admin, reason, unpause_time));
     }
 
-    /// Removes creator-specific circuit breaker limits. Admin only.
-    /// 
-    /// Reverts creator to using global limits.
-    /// Emits `("creator_cb_remove",)` with data `creator`.
-    pub fn remove_creator_cb_limit(env: Env, admin: Address, creator: Address) {
+    /// Resumes normal operations. Admin only. Fails if contract is not paused.
+    ///
+    /// Emits `("unpaused",)` with data `admin`.
+    pub fn unpause(env: Env, admin: Address) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
+        if !Self::check_is_paused(&env) {
+            panic_with_error!(&env, TipJarError::NotPaused);
+        }
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().remove(&DataKey::PauseReason);
+        env.storage().instance().remove(&DataKey::PauseUntil);
+        env.events().publish((symbol_short!("unpaused"),), admin);
+    }
 
-        env.storage()
-            .persistent()
-            .remove(&DataKey::CircuitBreaker(CircuitBreakerKey::CreatorOverrides(creator.clone())));
+    /// Returns `true` when the contract is currently paused (respects auto-unpause).
+    pub fn is_paused(env: Env) -> bool {
+        Self::check_is_paused(&env)
+    }
 
-        env.events().publish((symbol_short!("cr_cb_rmv"),), creator);
+    /// Returns the pause reason if the contract is paused, or `None` otherwise.
+    pub fn get_pause_reason(env: Env) -> Option<String> {
+        if !Self::check_is_paused(&env) {
+            return None;
+        }
+        env.storage().instance().get(&DataKey::PauseReason)
+    }
+
+    /// Returns the auto-unpause timestamp if set, or `None` for indefinite pause.
+    pub fn get_pause_until(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::PauseUntil)
     }
 
     /// Sets token-specific circuit breaker limits. Admin only.
@@ -4617,7 +4509,552 @@ impl TipJarContract {
         successful_tips
     }
 
-    // ── milestone rewards ─────────────────────────────────────────────────────
+    // ── batch withdraw ────────────────────────────────────────────────────────
+
+    /// Withdraws balances across multiple tokens in a single transaction.
+    ///
+    /// Each `WithdrawOperation` specifies a `token` and the `amount` to withdraw.
+    /// All operations are validated before any transfer is executed (atomic: all-or-nothing).
+    /// Batch size is capped at 20 to prevent gas exhaustion.
+    ///
+    /// Emits `("batch_wdr",)` with data `(creator, count, operations_count)` on success.
+    /// Emits `("batch_wdr_op",)` with data `(creator, token, amount, index)` for each operation.
+    pub fn batch_withdraw(
+        env: Env,
+        creator: Address,
+        operations: Vec<WithdrawOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        // ── Validation pass (checks before any state change) ─────────────────
+        for op in operations.iter() {
+            if op.amount <= 0 {
+                panic_with_error!(&env, TipJarError::InvalidAmount);
+            }
+
+            let bal_key = DataKey::CreatorBalance(creator.clone(), op.token.clone());
+            let balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&bal_key)
+                .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+
+            if op.amount > balance {
+                panic_with_error!(&env, TipJarError::InsufficientBalance);
+            }
+        }
+
+        // ── Effects pass (state updates before external calls) ────────────────
+        for op in operations.iter() {
+            let bal_key = DataKey::CreatorBalance(creator.clone(), op.token.clone());
+            let balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&bal_key)
+                .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
+            env.storage()
+                .persistent()
+                .set(&bal_key, &(balance - op.amount));
+        }
+
+        // ── Interactions pass (external token transfers) ──────────────────────
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let contract_address = env.current_contract_address();
+
+        for (index, op) in operations.iter().enumerate() {
+            token::Client::new(&env, &op.token).transfer(
+                &contract_address,
+                &creator,
+                &op.amount,
+            );
+
+            env.events().publish(
+                (symbol_short!("btch_wdr"),),
+                (creator.clone(), op.token.clone(), op.amount, index as u32),
+            );
+
+            results.push_back(BatchResult {
+                success: true,
+                index: index as u32,
+            });
+        }
+
+        env.events().publish(
+            (symbol_short!("batch_wdr"),),
+            (creator.clone(), op_count),
+        );
+
+        results
+    }
+
+    /// Sends multiple tips in a single transaction, returning per-operation results.
+    ///
+    /// Accepts up to 20 `TipOperation` entries. All amounts are validated before any
+    /// token transfer occurs (atomic: all-or-nothing). A single transfer covers the
+    /// total amount, then balances are distributed to each creator.
+    ///
+    /// Emits `("btch_tip2",)` with data `(tipper, count, total_amount)` on success.
+    /// Emits `("btch_tip_op",)` with data `(tipper, creator, token, amount, index)` per operation.
+    pub fn batch_tip_v2(
+        env: Env,
+        tipper: Address,
+        operations: Vec<TipOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        // ── Validation pass ───────────────────────────────────────────────────
+        // Group totals by token so we can do one transfer per token.
+        let mut token_totals: Map<Address, i128> = Map::new(&env);
+
+        for op in operations.iter() {
+            if op.amount <= 0 {
+                panic_with_error!(&env, TipJarError::InvalidAmount);
+            }
+
+            let whitelisted: bool = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenWhitelist(op.token.clone()))
+                .unwrap_or(false);
+            if !whitelisted {
+                panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+            }
+
+            let existing: i128 = token_totals.get(op.token.clone()).unwrap_or(0);
+            token_totals.set(
+                op.token.clone(),
+                existing.checked_add(op.amount).expect("total overflow"),
+            );
+        }
+
+        // ── Transfer total per token (one transfer per distinct token) ─────────
+        let contract_address = env.current_contract_address();
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(0);
+
+        for token_key in token_totals.keys() {
+            let total: i128 = token_totals.get(token_key.clone()).unwrap_or(0);
+            token::Client::new(&env, &token_key).transfer(&tipper, &contract_address, &total);
+        }
+
+        // ── Effects + Interactions pass ───────────────────────────────────────
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let mut grand_total: i128 = 0;
+
+        for (index, op) in operations.iter().enumerate() {
+            let fee: i128 = (op.amount * fee_bp as i128) / 10_000;
+            let creator_amount = op.amount - fee;
+
+            if fee > 0 {
+                let fee_key = DataKey::PlatformFeeBalance(op.token.clone());
+                let new_fee_bal: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&fee_key)
+                    .unwrap_or(0i128)
+                    .checked_add(fee)
+                    .expect("fee overflow");
+                env.storage().instance().set(&fee_key, &new_fee_bal);
+            }
+
+            let bal_key = DataKey::CreatorBalance(op.creator.clone(), op.token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&bal_key, &existing_bal.checked_add(creator_amount).expect("balance overflow"));
+
+            let tot_key = DataKey::CreatorTotal(op.creator.clone(), op.token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&tot_key, &existing_tot.checked_add(creator_amount).expect("total overflow"));
+
+            Self::update_leaderboard_stats(&env, &tipper, &op.creator, creator_amount);
+
+            env.events().publish(
+                (symbol_short!("btp_op"),),
+                (tipper.clone(), op.creator.clone(), op.token.clone(), creator_amount, index as u32),
+            );
+
+            results.push_back(BatchResult {
+                success: true,
+                index: index as u32,
+            });
+
+            grand_total = grand_total.checked_add(op.amount).expect("grand total overflow");
+        }
+
+        env.events().publish(
+            (symbol_short!("btch_tip2"),),
+            (tipper, op_count, grand_total),
+        );
+
+        results
+    }
+
+    // ── liquidity mining ──────────────────────────────────────────────────────
+
+    /// Creates a new liquidity mining program.
+    ///
+    /// Transfers `total_rewards` of `reward_token` from `admin` into the contract.
+    /// Returns the new program ID.
+    ///
+    /// * `reward_rate_bps`  — annual reward rate in basis points (e.g. 2000 = 20 %).
+    /// * `vesting_cliff`    — seconds before any rewards unlock.
+    /// * `vesting_duration` — total vesting window in seconds (>= cliff, <= 4 years).
+    /// * `end_time`         — program end timestamp; pass 0 for no end.
+    ///
+    /// Emits `("lm_create",)` with `(program_id, lp_token, reward_token, total_rewards, rate_bps)`.
+    pub fn lm_create_program(
+        env: Env,
+        admin: Address,
+        lp_token: Address,
+        reward_token: Address,
+        total_rewards: i128,
+        reward_rate_bps: u32,
+        vesting_cliff: u64,
+        vesting_duration: u64,
+        end_time: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        liquidity_mining::create_program(
+            &env,
+            &admin,
+            &lp_token,
+            &reward_token,
+            total_rewards,
+            reward_rate_bps,
+            vesting_cliff,
+            vesting_duration,
+            end_time,
+        )
+    }
+
+    /// Stakes `amount` LP tokens into a liquidity mining program.
+    ///
+    /// Emits `("lm_stake",)` with `(provider, program_id, amount, new_total_staked)`.
+    pub fn lm_stake(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::stake(&env, &provider, program_id, amount);
+    }
+
+    /// Unstakes `amount` LP tokens from a liquidity mining program.
+    ///
+    /// Accrues pending rewards before reducing the position.
+    /// Emits `("lm_unstk",)` with `(provider, program_id, amount, remaining_staked)`.
+    pub fn lm_unstake(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        amount: i128,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::unstake(&env, &provider, program_id, amount);
+    }
+
+    /// Claims all vested mining rewards for a provider. Returns the amount claimed.
+    ///
+    /// Emits `("lm_claim",)` with `(provider, program_id, amount_claimed)`.
+    pub fn lm_claim_rewards(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+        liquidity_mining::claim_rewards(&env, &provider, program_id)
+    }
+
+    /// Applies a boost to a provider's position by locking rewards for `lock_duration` seconds.
+    ///
+    /// Boost scales linearly from 1× (no lock) to 3× (lock = 1 year).
+    /// Only increasing boosts are accepted.
+    /// Emits `("lm_boost",)` with `(provider, program_id, new_boost, lock_until)`.
+    pub fn lm_apply_boost(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+        lock_duration: u64,
+    ) {
+        Self::require_not_paused(&env);
+        liquidity_mining::apply_boost(&env, &provider, program_id, lock_duration);
+    }
+
+    /// Deactivates a mining program. Existing positions can still claim vested rewards.
+    ///
+    /// Emits `("lm_deact",)` with `(program_id,)`.
+    pub fn lm_deactivate_program(env: Env, admin: Address, program_id: u64) {
+        Self::require_not_paused(&env);
+        liquidity_mining::deactivate_program(&env, &admin, program_id);
+    }
+
+    /// Returns the vesting schedule info for a provider's position.
+    pub fn lm_get_vesting_info(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> liquidity_mining::VestingInfo {
+        liquidity_mining::get_vesting_info(&env, &provider, program_id)
+    }
+
+    /// Returns a mining program by ID.
+    pub fn lm_get_program(env: Env, program_id: u64) -> liquidity_mining::MiningProgram {
+        liquidity_mining::get_program_info(&env, program_id)
+    }
+
+    /// Returns a provider's position in a mining program (with accrued rewards).
+    pub fn lm_get_position(
+        env: Env,
+        provider: Address,
+        program_id: u64,
+    ) -> liquidity_mining::MiningPosition {
+        liquidity_mining::get_position_info(&env, &provider, program_id)
+    }
+
+    /// Returns all program IDs a provider has participated in.
+    pub fn lm_get_provider_programs(env: Env, provider: Address) -> Vec<u64> {
+        liquidity_mining::get_provider_program_ids(&env, &provider)
+    }
+
+    /// Returns the pending (not yet vested) rewards for a provider in a program.
+    pub fn lm_get_pending_rewards(env: Env, provider: Address, program_id: u64) -> i128 {
+        liquidity_mining::get_pending_rewards(&env, &provider, program_id)
+    }
+
+    // ── bonding curves ────────────────────────────────────────────────────────
+
+    /// Creates a new bonding curve for dynamic tip token pricing.
+    ///
+    /// * `params`           — curve type, pricing parameters, and fees.
+    /// * `initial_reserve`  — optional seed collateral transferred from `creator` (pass 0 for none).
+    ///
+    /// Returns the new curve ID.
+    /// Emits `("bc_create",)` with `(curve_id, creator, tip_token, reserve_token)`.
+    pub fn bc_create_curve(
+        env: Env,
+        creator: Address,
+        tip_token: Address,
+        reserve_token: Address,
+        params: bonding_curve::CurveParams,
+        initial_reserve: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        bonding_curve::create_curve(
+            &env,
+            &creator,
+            &tip_token,
+            &reserve_token,
+            params,
+            initial_reserve,
+        )
+    }
+
+    /// Buys `token_amount` tip tokens from a bonding curve.
+    ///
+    /// Collateral is calculated by integrating the price curve.
+    /// The transaction reverts if the total cost exceeds `max_collateral`.
+    ///
+    /// Emits `("bc_buy",)` with `(buyer, curve_id, token_amount, collateral_paid, new_price)`.
+    pub fn bc_buy(
+        env: Env,
+        buyer: Address,
+        curve_id: u64,
+        token_amount: i128,
+        max_collateral: i128,
+    ) -> bonding_curve::TradeResult {
+        Self::require_not_paused(&env);
+        bonding_curve::buy(&env, &buyer, curve_id, token_amount, max_collateral)
+    }
+
+    /// Sells `token_amount` tip tokens back to a bonding curve.
+    ///
+    /// Collateral returned is calculated by integrating the price curve.
+    /// The transaction reverts if the net return is below `min_collateral`.
+    ///
+    /// Emits `("bc_sell",)` with `(seller, curve_id, token_amount, collateral_returned, new_price)`.
+    pub fn bc_sell(
+        env: Env,
+        seller: Address,
+        curve_id: u64,
+        token_amount: i128,
+        min_collateral: i128,
+    ) -> bonding_curve::TradeResult {
+        Self::require_not_paused(&env);
+        bonding_curve::sell(&env, &seller, curve_id, token_amount, min_collateral)
+    }
+
+    /// Updates the buy and sell fee parameters of a curve.
+    /// Only the curve creator can call this.
+    ///
+    /// Emits `("bc_fee",)` with `(curve_id, buy_fee_bps, sell_fee_bps)`.
+    pub fn bc_update_fees(
+        env: Env,
+        creator: Address,
+        curve_id: u64,
+        buy_fee_bps: u32,
+        sell_fee_bps: u32,
+    ) {
+        Self::require_not_paused(&env);
+        bonding_curve::update_fees(&env, &creator, curve_id, buy_fee_bps, sell_fee_bps);
+    }
+
+    /// Withdraws accumulated fees to the curve creator.
+    /// Returns the amount withdrawn.
+    ///
+    /// Emits `("bc_wfee",)` with `(curve_id, creator, amount)`.
+    pub fn bc_withdraw_fees(env: Env, creator: Address, curve_id: u64) -> i128 {
+        Self::require_not_paused(&env);
+        bonding_curve::withdraw_fees(&env, &creator, curve_id)
+    }
+
+    /// Deactivates a bonding curve. Only the creator can call this.
+    ///
+    /// Emits `("bc_deact",)` with `(curve_id,)`.
+    pub fn bc_deactivate(env: Env, creator: Address, curve_id: u64) {
+        Self::require_not_paused(&env);
+        bonding_curve::deactivate_curve(&env, &creator, curve_id);
+    }
+
+    /// Returns a price quote for buying or selling `amount` tokens without
+    /// executing any trade.
+    pub fn bc_get_quote(env: Env, curve_id: u64, amount: i128) -> bonding_curve::PriceQuote {
+        bonding_curve::get_quote(&env, curve_id, amount)
+    }
+
+    /// Returns the current spot price for a bonding curve (× PRECISION).
+    pub fn bc_get_spot_price(env: Env, curve_id: u64) -> i128 {
+        bonding_curve::get_spot_price(&env, curve_id)
+    }
+
+    /// Returns a bonding curve's full configuration and state.
+    pub fn bc_get_curve(env: Env, curve_id: u64) -> bonding_curve::BondingCurve {
+        bonding_curve::get_curve_info(&env, curve_id)
+    }
+
+    // ── TWAP oracle ───────────────────────────────────────────────────────────
+
+    /// Creates a new TWAP oracle for manipulation-resistant price feeds.
+    ///
+    /// * `updater`          — address authorised to push price updates.
+    /// * `window_seconds`   — default TWAP window in seconds (60 – 604 800).
+    /// * `max_observations` — ring-buffer capacity (2 – 256).
+    /// * `initial_price`    — seed price × PRICE_PRECISION (must be > 0).
+    ///
+    /// Returns the new oracle ID.
+    /// Emits `("twap_new",)` with `(oracle_id, base_token, quote_token, initial_price)`.
+    pub fn twap_create_oracle(
+        env: Env,
+        creator: Address,
+        updater: Address,
+        base_token: Address,
+        quote_token: Address,
+        window_seconds: u64,
+        max_observations: u32,
+        initial_price: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        twap_oracle::create_oracle(
+            &env,
+            &creator,
+            &updater,
+            &base_token,
+            &quote_token,
+            window_seconds,
+            max_observations,
+            initial_price,
+        )
+    }
+
+    /// Records a new price observation into the oracle's ring buffer.
+    ///
+    /// Only the oracle's designated `updater` address may call this.
+    /// Emits `("twap_upd",)` with `(oracle_id, price, timestamp, accumulator)`.
+    pub fn twap_record_price(env: Env, updater: Address, oracle_id: u64, price: i128) {
+        Self::require_not_paused(&env);
+        twap_oracle::record_price(&env, &updater, oracle_id, price);
+    }
+
+    /// Returns the TWAP over the oracle's configured default window.
+    ///
+    /// Uses cumulative price accumulators: `TWAP = Δaccumulator / Δtime`.
+    /// Falls back to the latest spot price if fewer than 2 observations exist.
+    pub fn twap_get_twap(env: Env, oracle_id: u64) -> twap_oracle::TwapResult {
+        twap_oracle::get_twap(&env, oracle_id)
+    }
+
+    /// Returns the TWAP over a custom `window_seconds`.
+    /// Pass `window_seconds = 0` to use the oracle's configured default.
+    pub fn twap_get_twap_window(
+        env: Env,
+        oracle_id: u64,
+        window_seconds: u64,
+    ) -> twap_oracle::TwapResult {
+        twap_oracle::get_twap_with_window(&env, oracle_id, window_seconds)
+    }
+
+    /// Returns the latest spot price for an oracle (not time-weighted).
+    pub fn twap_get_latest_price(env: Env, oracle_id: u64) -> i128 {
+        twap_oracle::get_latest_price(&env, oracle_id)
+    }
+
+    /// Returns up to `limit` most-recent observations for an oracle,
+    /// in chronological order (oldest first).
+    pub fn twap_get_observations(
+        env: Env,
+        oracle_id: u64,
+        limit: u32,
+    ) -> Vec<twap_oracle::Observation> {
+        twap_oracle::get_observations(&env, oracle_id, limit)
+    }
+
+    /// Returns the oracle configuration and live state.
+    pub fn twap_get_oracle(env: Env, oracle_id: u64) -> twap_oracle::TwapOracle {
+        twap_oracle::get_oracle_info(&env, oracle_id)
+    }
+
+    /// Updates the oracle's TWAP window and/or updater address.
+    /// Only the current updater may call this.
+    /// Emits `("twap_cfg",)` with `(oracle_id, new_window_seconds, new_updater)`.
+    pub fn twap_update_config(
+        env: Env,
+        updater: Address,
+        oracle_id: u64,
+        new_window_seconds: u64,
+        new_updater: Address,
+    ) {
+        Self::require_not_paused(&env);
+        twap_oracle::update_config(&env, &updater, oracle_id, new_window_seconds, &new_updater);
+    }
+
+    /// Deactivates a TWAP oracle. Only the updater may call this.
+    /// Emits `("twap_off",)` with `(oracle_id,)`.
+    pub fn twap_deactivate(env: Env, updater: Address, oracle_id: u64) {
+        Self::require_not_paused(&env);
+        twap_oracle::deactivate_oracle(&env, &updater, oracle_id);
+    }
 
     /// Checks and awards milestones when a creator reaches specific tip thresholds.
     ///
@@ -6095,7 +6532,7 @@ impl TipJarContract {
             .get(&DataKey::Bridge(BridgeKey::Enabled))
             .unwrap_or(false)
     }
-
+a
     // ── options trading ──────────────────────────────────────────────────────
 
     /// Initialize options trading system with default pricing parameters.
@@ -6468,232 +6905,141 @@ impl TipJarContract {
         expired_count
     }
 
-    // ── Synthetic Assets ─────────────────────────────────────────────────────
+    // ── index funds ──────────────────────────────────────────────────────────
 
-    /// Creates a new synthetic asset backed by a creator's tip pool.
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address whose tip pool backs the asset
-    /// - `backing_token`: Token address for collateral
-    /// - `collateralization_ratio`: Ratio in basis points (10000-50000)
-    ///
-    /// # Returns
-    /// - New asset identifier
-    pub fn create_synthetic_asset(
+    /// Create a new tip index fund with a basket of creators.
+    /// `components` must have at least 2 entries and weights must sum to 10_000 bps.
+    pub fn create_index_fund(
         env: Env,
-        creator: Address,
-        backing_token: Address,
-        collateralization_ratio: u32,
+        manager: Address,
+        token: Address,
+        name: String,
+        components: Vec<index_fund::IndexComponent>,
     ) -> u64 {
-        creator.require_auth();
+        manager.require_auth();
         Self::require_not_paused(&env);
-        
-        synthetic::admin::create_synthetic_asset(
-            &env,
-            &creator,
-            &backing_token,
-            collateralization_ratio,
-        ).unwrap_or_else(|e| panic_with_error!(&env, e))
+
+        if components.len() < 2 {
+            panic_with_error!(&env, TipJarError::IndexFundTooFewCreators);
+        }
+        if !index_fund::composition::validate_weights(&components) {
+            panic_with_error!(&env, TipJarError::InvalidIndexWeights);
+        }
+
+        let fund_id = index_fund::composition::create_index_fund(
+            &env, &manager, &token, name, components,
+        );
+
+        env.events().publish(
+            (symbol_short!("idx_new"),),
+            (manager, fund_id),
+        );
+
+        fund_id
     }
 
-    /// Mints synthetic tokens by providing collateral.
-    ///
-    /// # Parameters
-    /// - `user`: Address requesting to mint tokens
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `amount`: Amount of synthetic tokens to mint
-    ///
-    /// # Returns
-    /// - Amount of collateral required and transferred
-    pub fn mint_synthetic_tokens(
+    /// Update the composition of an existing index fund (manager only).
+    pub fn update_index_composition(
         env: Env,
-        user: Address,
-        asset_id: u64,
+        caller: Address,
+        fund_id: u64,
+        new_components: Vec<index_fund::IndexComponent>,
+    ) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+
+        if new_components.len() < 2 {
+            panic_with_error!(&env, TipJarError::IndexFundTooFewCreators);
+        }
+        if !index_fund::composition::validate_weights(&new_components) {
+            panic_with_error!(&env, TipJarError::InvalidIndexWeights);
+        }
+
+        index_fund::composition::update_composition(&env, fund_id, &caller, new_components);
+
+        env.events().publish(
+            (symbol_short!("idx_upd"),),
+            (caller, fund_id),
+        );
+    }
+
+    /// Rebalance a fund's creator allocations to match current target weights.
+    pub fn rebalance_index_fund(env: Env, caller: Address, fund_id: u64) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+
+        index_fund::rebalance::rebalance(&env, fund_id, &caller);
+
+        env.events().publish(
+            (symbol_short!("idx_reb"),),
+            (caller, fund_id),
+        );
+    }
+
+    /// Deposit tokens into an index fund and receive shares.
+    /// Returns the number of shares minted.
+    pub fn deposit_index_fund(
+        env: Env,
+        depositor: Address,
+        fund_id: u64,
         amount: i128,
     ) -> i128 {
-        user.require_auth();
         Self::require_not_paused(&env);
-        
-        synthetic::minting::mint(&env, &user, asset_id, amount)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
+
+        if amount < index_fund::MIN_DEPOSIT {
+            panic_with_error!(&env, TipJarError::IndexDepositTooSmall);
+        }
+
+        let shares = index_fund::shares::deposit(&env, fund_id, &depositor, amount);
+
+        env.events().publish(
+            (symbol_short!("idx_dep"),),
+            (depositor, fund_id, amount, shares),
+        );
+
+        shares
     }
 
-    /// Redeems synthetic tokens for underlying value.
-    ///
-    /// # Parameters
-    /// - `holder`: Address redeeming tokens
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `amount`: Amount of synthetic tokens to redeem
-    ///
-    /// # Returns
-    /// - Redemption value transferred to holder
-    pub fn redeem_synthetic_tokens(
+    /// Withdraw from an index fund by redeeming shares.
+    /// Returns the token amount returned to the holder.
+    pub fn withdraw_index_fund(
         env: Env,
         holder: Address,
-        asset_id: u64,
-        amount: i128,
+        fund_id: u64,
+        shares: i128,
     ) -> i128 {
-        holder.require_auth();
-        
-        synthetic::redemption::redeem(&env, &holder, asset_id, amount)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
+        Self::require_not_paused(&env);
+
+        if shares <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+
+        let amount_out = index_fund::shares::withdraw(&env, fund_id, &holder, shares);
+
+        env.events().publish(
+            (symbol_short!("idx_wdr"),),
+            (holder, fund_id, shares, amount_out),
+        );
+
+        amount_out
     }
 
-    /// Pauses a synthetic asset (prevents new minting).
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address (must match asset creator)
-    /// - `asset_id`: Identifier of the synthetic asset
-    pub fn pause_synthetic_asset(env: Env, creator: Address, asset_id: u64) {
-        creator.require_auth();
-        
-        synthetic::admin::pause_synthetic_asset(&env, &creator, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
+    /// Get the current NAV (net asset value) per share for a fund.
+    pub fn get_index_fund_nav(env: Env, fund_id: u64) -> i128 {
+        index_fund::shares::get_nav(&env, fund_id)
     }
 
-    /// Resumes a paused synthetic asset.
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address (must match asset creator)
-    /// - `asset_id`: Identifier of the synthetic asset
-    pub fn resume_synthetic_asset(env: Env, creator: Address, asset_id: u64) {
-        creator.require_auth();
-        
-        synthetic::admin::resume_synthetic_asset(&env, &creator, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
+    /// Get the share balance of a holder in a fund.
+    pub fn get_index_fund_shares(env: Env, fund_id: u64, holder: Address) -> i128 {
+        index_fund::shares::get_shares(&env, fund_id, &holder)
     }
 
-    /// Updates collateralization ratio for future minting.
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address (must match asset creator)
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `new_ratio`: New ratio in basis points (10000-50000)
-    pub fn update_collateralization_ratio(
+    /// Get the current creator allocations for a fund.
+    pub fn get_index_fund_allocations(
         env: Env,
-        creator: Address,
-        asset_id: u64,
-        new_ratio: u32,
-    ) {
-        creator.require_auth();
-        
-        synthetic::admin::update_collateralization_ratio(&env, &creator, asset_id, new_ratio)
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
-    }
-
-    /// Adds collateral to improve collateralization ratio.
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `amount`: Amount of collateral to add
-    pub fn add_synthetic_collateral(
-        env: Env,
-        creator: Address,
-        asset_id: u64,
-        amount: i128,
-    ) {
-        creator.require_auth();
-        
-        synthetic::admin::add_collateral(&env, &creator, asset_id, amount)
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
-    }
-
-    /// Retrieves synthetic asset details by asset identifier.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    ///
-    /// # Returns
-    /// - Complete synthetic asset record
-    pub fn get_synthetic_asset(env: Env, asset_id: u64) -> synthetic::SyntheticAsset {
-        synthetic::queries::get_synthetic_asset(&env, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Retrieves all synthetic assets for a creator.
-    ///
-    /// # Parameters
-    /// - `creator`: Creator address
-    ///
-    /// # Returns
-    /// - Vector of asset identifiers for the creator
-    pub fn get_creator_synthetic_assets(env: Env, creator: Address) -> Vec<u64> {
-        synthetic::queries::get_creator_synthetic_assets(&env, &creator)
-    }
-
-    /// Retrieves the current oracle price for a synthetic asset.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    ///
-    /// # Returns
-    /// - Current oracle price
-    pub fn get_synthetic_oracle_price(env: Env, asset_id: u64) -> i128 {
-        synthetic::queries::get_synthetic_oracle_price(&env, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Retrieves the total supply for a synthetic asset.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    ///
-    /// # Returns
-    /// - Total supply of synthetic tokens
-    pub fn get_synthetic_total_supply(env: Env, asset_id: u64) -> i128 {
-        synthetic::queries::get_synthetic_total_supply(&env, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Retrieves the collateralization ratio for a synthetic asset.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    ///
-    /// # Returns
-    /// - Current collateralization ratio in basis points
-    pub fn get_synth_collateral_ratio(env: Env, asset_id: u64) -> u32 {
-        synthetic::queries::get_synthetic_collateralization_ratio(&env, asset_id)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Calculates the required collateral for a minting amount.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `amount`: Amount of synthetic tokens to mint
-    ///
-    /// # Returns
-    /// - Required collateral amount
-    pub fn calculate_required_collateral(env: Env, asset_id: u64, amount: i128) -> i128 {
-        synthetic::queries::calculate_synthetic_required_collateral(&env, asset_id, amount)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Calculates the redemption value for a token amount.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `amount`: Amount of synthetic tokens
-    ///
-    /// # Returns
-    /// - Redemption value in backing tokens
-    pub fn calculate_redemption_value(env: Env, asset_id: u64, amount: i128) -> i128 {
-        synthetic::queries::calculate_synthetic_redemption_value(&env, asset_id, amount)
-            .unwrap_or_else(|e| panic_with_error!(&env, e))
-    }
-
-    /// Retrieves synthetic token balance for holder and asset.
-    ///
-    /// # Parameters
-    /// - `asset_id`: Identifier of the synthetic asset
-    /// - `holder`: Address of the token holder
-    ///
-    /// # Returns
-    /// - Balance of synthetic tokens (0 if no balance exists)
-    pub fn get_synthetic_holder_balance(env: Env, asset_id: u64, holder: Address) -> i128 {
-        synthetic::queries::get_holder_balance(&env, asset_id, &holder)
+        fund_id: u64,
+    ) -> Vec<(Address, i128)> {
+        index_fund::rebalance::get_allocations(&env, fund_id)
     }
 }
 

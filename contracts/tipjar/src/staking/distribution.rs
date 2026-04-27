@@ -108,7 +108,7 @@ pub fn unstake(env: &Env, staker: &Address, amount: i128) {
     }
 
     // Claim rewards first
-    claim_rewards(env.clone(), staker.clone());
+    claim_rewards(env, staker);
 
     // Update stake
     stake_info.amount -= amount;

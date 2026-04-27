@@ -9,6 +9,9 @@ pub mod bridge;
 pub mod privacy;
 pub mod synthetic;
 
+/// Polynomial commitment scheme for efficient tip data verification.
+pub mod poly_commit;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
     token, Address, BytesN, Env, Map, String, Vec,

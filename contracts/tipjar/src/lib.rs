@@ -824,6 +824,20 @@ pub enum DataKey {
     AmmLpShares(u64, Address),
     /// Fee-per-share debt snapshot keyed by (pool_id, provider).
     AmmProviderDebt(u64, Address),
+    /// Homomorphic encryption configuration.
+    HomomorphicConfig,
+    /// Key management configuration for homomorphic encryption.
+    KeyManagementConfig,
+    /// History of public keys for homomorphic encryption.
+    KeyHistory,
+    /// Encrypted balance keyed by (creator, token).
+    EncryptedBalance(Address, Address),
+    /// Encrypted tip record keyed by tip_id.
+    EncryptedTip(u64),
+    /// Global counter for encrypted tip IDs.
+    EncryptedTipCounter,
+    /// Nullifier for encrypted tips (prevents double-spend).
+    PrivacyNullifier(BytesN<32>),
 }
 
 #[contracterror]

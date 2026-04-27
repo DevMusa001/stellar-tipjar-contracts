@@ -82,6 +82,9 @@ pub mod quadratic_funding;
 // TWAP oracle
 pub mod twap_oracle;
 
+// Tip payment channels
+pub mod payment_channel;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -844,38 +847,10 @@ pub enum DataKey {
     EncryptedTipCounter,
     /// Nullifier for encrypted tips (prevents double-spend).
     PrivacyNullifier(BytesN<32>),
-    /// Sidechain operator address.
-    SidechainOperator,
-    /// Sidechain feature enabled flag.
-    SidechainEnabled,
-    /// Latest finalized checkpoint sequence number.
-    SidechainLatestCheckpoint,
-    /// Checkpoint record keyed by sequence number.
-    SidechainCheckpoint(u64),
-    /// Pending tip batch keyed by batch ID.
-    SidechainBatch(u64),
-    /// Global sidechain batch counter.
-    SidechainBatchCounter,
-    /// Finalized sidechain tip total per (creator, token).
-    SidechainFinalizedTotal(Address, Address),
-    /// Rollup sequencer address.
-    RollupSequencer,
-    /// Rollup feature enabled flag.
-    RollupEnabled,
-    /// Challenge period in seconds.
-    RollupChallengePeriod,
-    /// Rollup batch record keyed by batch ID.
-    RollupBatch(u64),
-    /// Global rollup batch counter.
-    RollupBatchCounter,
-    /// Fraud proof record keyed by batch ID.
-    RollupFraudProof(u64),
-    /// Count of pending rollup batches.
-    RollupPendingCount,
-    /// Count of finalized rollup batches.
-    RollupFinalizedCount,
-    /// Count of challenged rollup batches.
-    RollupChallengedCount,
+    /// Payment channel record keyed by (party_a, party_b, token).
+    PaymentChannel(Address, Address, Address),
+    /// Global counter for payment channel IDs.
+    ChannelCounter,
 }
 
 #[contracterror]
@@ -1167,6 +1142,30 @@ pub enum OtherError {
     ActiveLoanExists = 110,
     InsufficientLendingLiquidity = 111,
     NoActiveCredit = 112,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ChannelError {
+    /// No channel exists for the given parties and token.
+    ChannelNotFound = 200,
+    /// Channel is not in the Open state.
+    ChannelNotOpen = 201,
+    /// Provided nonce is not strictly greater than the current nonce.
+    StaleNonce = 202,
+    /// Caller is not a party to this channel.
+    NotChannelParty = 203,
+    /// Channel is not in the Disputed state.
+    ChannelNotDisputed = 204,
+    /// Dispute window has not yet elapsed.
+    DisputeWindowActive = 205,
+    /// Proposed balance exceeds total channel deposit.
+    InvalidChannelBalance = 206,
+    /// Deposit amount must be greater than zero.
+    InvalidDeposit = 207,
+    /// Dispute window must be greater than zero.
+    InvalidDisputeWindow = 208,
 }
 
 
@@ -8514,123 +8513,271 @@ a
         governance::conviction_integration::get_adjusted_proposal_threshold(&env, &voter)
     }
 
-    // ── sidechain integration ────────────────────────────────────────────────
+    // ── payment channels ─────────────────────────────────────────────────────
 
-    /// Initialize the sidechain feature with a designated operator.
+    /// Opens a bidirectional payment channel between `party_a` and `party_b`.
     ///
-    /// Admin only. The operator is the only address permitted to submit and
-    /// finalize checkpoints. Emits `("sc_init",)`.
-    pub fn init_sidechain(env: Env, admin: Address, operator: Address) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin {
-            panic_with_error!(&env, TipJarError::Unauthorized);
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::SidechainOperator, &operator);
-        env.storage()
-            .instance()
-            .set(&DataKey::SidechainEnabled, &true);
-        env.storage()
-            .instance()
-            .set(&DataKey::SidechainLatestCheckpoint, &0u64);
-        env.events().publish((symbol_short!("sc_init"),), operator);
-    }
-
-    /// Submit a new checkpoint anchoring sidechain state on the main chain.
+    /// Both parties' deposits are transferred into contract escrow immediately.
+    /// `dispute_window` is the seconds a counterparty has to submit a newer state
+    /// during a unilateral close.
     ///
-    /// Operator only. Returns the new checkpoint sequence number.
-    pub fn submit_checkpoint(
+    /// Emits `("ch_open",)` with data `(party_a, party_b, token, total_deposit)`.
+    pub fn open_channel(
         env: Env,
-        operator: Address,
-        state_root: BytesN<32>,
-        tip_count: u32,
-        total_volume: i128,
-    ) -> u64 {
-        let enabled: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::SidechainEnabled)
-            .unwrap_or(false);
-        if !enabled {
-            panic_with_error!(&env, TipJarError::Unauthorized);
-        }
-        sidechain::checkpoint::submit_checkpoint(&env, &operator, state_root, tip_count, total_volume)
-    }
-
-    /// Finalize a checkpoint, enabling batch settlement against it.
-    ///
-    /// Operator only.
-    pub fn finalize_checkpoint(env: Env, operator: Address, seq: u64) {
-        let enabled: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::SidechainEnabled)
-            .unwrap_or(false);
-        if !enabled {
-            panic_with_error!(&env, TipJarError::Unauthorized);
-        }
-        sidechain::checkpoint::finalize_checkpoint(&env, &operator, seq);
-    }
-
-    /// Record a pending tip batch linked to a checkpoint.
-    ///
-    /// Operator only. Returns the new batch ID.
-    pub fn record_tip_batch(
-        env: Env,
-        operator: Address,
-        creator: Address,
+        party_a: Address,
+        party_b: Address,
         token: Address,
-        total_amount: i128,
-        tip_count: u32,
-        checkpoint_seq: u64,
-    ) -> u64 {
-        operator.require_auth();
-        let stored_op: Option<Address> = env
+        deposit_a: i128,
+        deposit_b: i128,
+        dispute_window: u64,
+    ) {
+        Self::require_not_paused(&env);
+        party_a.require_auth();
+        party_b.require_auth();
+
+        if deposit_a <= 0 || deposit_b <= 0 {
+            panic_with_error!(&env, ChannelError::InvalidDeposit);
+        }
+        if dispute_window == 0 {
+            panic_with_error!(&env, ChannelError::InvalidDisputeWindow);
+        }
+
+        let whitelisted: bool = env
             .storage()
             .instance()
-            .get(&DataKey::SidechainOperator);
-        let stored_op = match stored_op {
-            Some(op) => op,
-            None => panic_with_error!(&env, TipJarError::Unauthorized),
-        };
-        if operator != stored_op {
-            panic_with_error!(&env, TipJarError::Unauthorized);
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
-        if total_amount <= 0 {
-            panic_with_error!(&env, TipJarError::InvalidAmount);
+
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
         }
-        sidechain::checkpoint::record_tip_batch(
-            &env,
-            creator,
-            token,
-            total_amount,
-            tip_count,
-            checkpoint_seq,
-        )
+
+        let channel = payment_channel::open(
+            &env, &party_a, &party_b, &token, deposit_a, deposit_b, dispute_window,
+        );
+
+        // CEI: state before external calls
+        env.storage().persistent().set(&key, &channel);
+
+        let tok = token::Client::new(&env, &token);
+        tok.transfer(&party_a, &env.current_contract_address(), &deposit_a);
+        tok.transfer(&party_b, &env.current_contract_address(), &deposit_b);
+
+        env.events().publish(
+            (symbol_short!("ch_open"),),
+            (party_a, party_b, token, deposit_a + deposit_b),
+        );
     }
 
-    /// Settle a pending tip batch into the creator's on-chain balance.
+    /// Updates the channel's latest agreed balance state.
     ///
-    /// Requires the linked checkpoint to be finalized. Anyone may call this.
-    pub fn finalize_tips(env: Env, batch_id: u64) {
-        sidechain::checkpoint::settle_batch(&env, batch_id);
+    /// Both parties must authorise. `new_balance_a` is party_a's new balance;
+    /// `nonce` must be strictly greater than the current nonce.
+    ///
+    /// Emits `("ch_upd",)` with data `(party_a, party_b, token, new_balance_a, nonce)`.
+    pub fn update_channel_state(
+        env: Env,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+        new_balance_a: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        party_a.require_auth();
+        party_b.require_auth();
+
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
+
+        if channel.status != payment_channel::ChannelStatus::Open {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
+        }
+        if nonce <= channel.nonce {
+            panic_with_error!(&env, ChannelError::StaleNonce);
+        }
+        if new_balance_a < 0 || new_balance_a > channel.total_deposit {
+            panic_with_error!(&env, ChannelError::InvalidChannelBalance);
+        }
+
+        channel.balance_a = new_balance_a;
+        channel.nonce = nonce;
+        env.storage().persistent().set(&key, &channel);
+
+        env.events().publish(
+            (symbol_short!("ch_upd"),),
+            (party_a, party_b, token, new_balance_a, nonce),
+        );
     }
 
-    /// Returns the current sidechain state summary.
-    pub fn get_sidechain_state(env: Env) -> sidechain::SidechainState {
-        sidechain::state::get_state(&env)
+    /// Cooperatively closes a channel. Both parties must authorise.
+    ///
+    /// Distributes funds according to the latest agreed state and marks the channel closed.
+    /// Emits `("ch_coop",)` with data `(party_a, party_b, token, balance_a, balance_b)`.
+    pub fn cooperative_close(
+        env: Env,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+    ) {
+        Self::require_not_paused(&env);
+        party_a.require_auth();
+        party_b.require_auth();
+
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
+
+        if channel.status != payment_channel::ChannelStatus::Open {
+            panic_with_error!(&env, ChannelError::ChannelNotOpen);
+        }
+
+        let bal_a = channel.balance_a;
+        let bal_b = payment_channel::balance_b(&channel);
+
+        channel.status = payment_channel::ChannelStatus::Closed;
+        env.storage().persistent().set(&key, &channel);
+
+        let tok = token::Client::new(&env, &token);
+        if bal_a > 0 {
+            tok.transfer(&env.current_contract_address(), &party_a, &bal_a);
+        }
+        if bal_b > 0 {
+            tok.transfer(&env.current_contract_address(), &party_b, &bal_b);
+        }
+
+        env.events().publish(
+            (symbol_short!("ch_coop"),),
+            (party_a, party_b, token, bal_a, bal_b),
+        );
     }
 
-    /// Returns the finalized sidechain tip total for a creator/token pair.
-    pub fn get_sidechain_finalized_total(env: Env, creator: Address, token: Address) -> i128 {
-        sidechain::state::get_finalized_total(&env, &creator, &token)
+    /// Initiates or finalises a unilateral (dispute) close.
+    ///
+    /// **First call** (by either party): sets status to `Disputed` and starts the
+    /// dispute window using the caller's proposed `balance_a` / `nonce`.
+    ///
+    /// **Second call** (by the counterparty, within the window): if the submitted
+    /// `nonce` is strictly higher, the newer state is applied before closing.
+    ///
+    /// **After the window**: anyone may call to finalise the close with the last
+    /// submitted state.
+    ///
+    /// Emits `("ch_disp",)` on initiation and `("ch_fin",)` on finalisation.
+    pub fn dispute_close(
+        env: Env,
+        caller: Address,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+        claimed_balance_a: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let key = DataKey::PaymentChannel(party_a.clone(), party_b.clone(), token.clone());
+        let mut channel: payment_channel::PaymentChannel = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, ChannelError::ChannelNotFound));
+
+        if caller != channel.party_a && caller != channel.party_b {
+            panic_with_error!(&env, ChannelError::NotChannelParty);
+        }
+
+        let now = env.ledger().timestamp();
+
+        match channel.status {
+            payment_channel::ChannelStatus::Open => {
+                // Initiate dispute
+                if claimed_balance_a < 0 || claimed_balance_a > channel.total_deposit {
+                    panic_with_error!(&env, ChannelError::InvalidChannelBalance);
+                }
+                if nonce < channel.nonce {
+                    panic_with_error!(&env, ChannelError::StaleNonce);
+                }
+                channel.status = payment_channel::ChannelStatus::Disputed;
+                channel.dispute_started_at = now;
+                channel.disputer = Some(caller.clone());
+                channel.balance_a = claimed_balance_a;
+                channel.nonce = nonce;
+                env.storage().persistent().set(&key, &channel);
+
+                env.events().publish(
+                    (symbol_short!("ch_disp"),),
+                    (caller, party_a, party_b, token, claimed_balance_a, nonce),
+                );
+            }
+            payment_channel::ChannelStatus::Disputed => {
+                let window_end = channel.dispute_started_at + channel.dispute_window;
+
+                if now < window_end {
+                    // Counterparty submitting a newer state
+                    if nonce <= channel.nonce {
+                        panic_with_error!(&env, ChannelError::StaleNonce);
+                    }
+                    if claimed_balance_a < 0 || claimed_balance_a > channel.total_deposit {
+                        panic_with_error!(&env, ChannelError::InvalidChannelBalance);
+                    }
+                    channel.balance_a = claimed_balance_a;
+                    channel.nonce = nonce;
+                    env.storage().persistent().set(&key, &channel);
+
+                    env.events().publish(
+                        (symbol_short!("ch_disp"),),
+                        (caller, party_a, party_b, token, claimed_balance_a, nonce),
+                    );
+                } else {
+                    // Window elapsed — finalise
+                    let bal_a = channel.balance_a;
+                    let bal_b = payment_channel::balance_b(&channel);
+
+                    channel.status = payment_channel::ChannelStatus::Closed;
+                    env.storage().persistent().set(&key, &channel);
+
+                    let tok = token::Client::new(&env, &token);
+                    if bal_a > 0 {
+                        tok.transfer(&env.current_contract_address(), &party_a, &bal_a);
+                    }
+                    if bal_b > 0 {
+                        tok.transfer(&env.current_contract_address(), &party_b, &bal_b);
+                    }
+
+                    env.events().publish(
+                        (symbol_short!("ch_fin"),),
+                        (party_a, party_b, token, bal_a, bal_b),
+                    );
+                }
+            }
+            payment_channel::ChannelStatus::Closed => {
+                panic_with_error!(&env, ChannelError::ChannelNotOpen);
+            }
+        }
     }
 
-    /// Returns a specific checkpoint by sequence number.
-    pub fn get_checkpoint(env: Env, seq: u64) -> Option<sidechain::Checkpoint> {
-        sidechain::state::get_checkpoint(&env, seq)
+    /// Returns the payment channel between `party_a`, `party_b`, and `token`.
+    pub fn get_channel(
+        env: Env,
+        party_a: Address,
+        party_b: Address,
+        token: Address,
+    ) -> Option<payment_channel::PaymentChannel> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PaymentChannel(party_a, party_b, token))
     }
 
     // ── optimistic rollup ────────────────────────────────────────────────────

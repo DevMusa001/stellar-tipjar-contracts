@@ -83,8 +83,8 @@ name = "poly_commit_tests"
 path = "tests/poly_commit_tests.rs"
 
 [[test]]
-name = "sidechain_tests"
-path = "tests/sidechain_tests.rs"
+name = "payment_channel_tests"
+path = "tests/payment_channel_tests.rs"
 
 [[test]]
 name = "rollup_tests"

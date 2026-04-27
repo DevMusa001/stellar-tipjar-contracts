@@ -90,3 +90,7 @@ path = "tests/payment_channel_tests.rs"
 name = "rollup_tests"
 path = "tests/rollup_tests.rs"
 
+
+[[test]]
+name = "proxy_tests"
+path = "tests/proxy_tests.rs"

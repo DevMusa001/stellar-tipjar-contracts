@@ -85,6 +85,9 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
+// Upgradeable proxy pattern
+pub mod proxy;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -851,6 +854,10 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
+    /// Proxy state (ProxyState struct) stored in instance storage.
+    ProxyState,
+    /// Active storage layout version, incremented on each proxy upgrade.
+    ProxyStorageVersion,
 }
 
 #[contracterror]
@@ -8862,6 +8869,43 @@ a
         let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
         let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
+    }
+
+    // ── proxy ────────────────────────────────────────────────────────────────
+
+    /// Initialise the proxy (one-time). Sets admin and optional upgrade delay.
+    pub fn proxy_init(env: Env, admin: Address, upgrade_delay_secs: u64) {
+        proxy::init(&env, &admin, upgrade_delay_secs);
+    }
+
+    /// Upgrade the contract WASM to `new_hash`. Subject to freeze and time-lock guards.
+    pub fn proxy_upgrade(env: Env, caller: Address, new_hash: BytesN<32>) {
+        proxy::upgrade(&env, &caller, new_hash);
+    }
+
+    /// Freeze the proxy, permanently blocking further upgrades.
+    pub fn proxy_freeze(env: Env, caller: Address) {
+        proxy::freeze(&env, &caller);
+    }
+
+    /// Set the minimum delay (seconds) before the next upgrade is allowed.
+    pub fn proxy_set_upgrade_delay(env: Env, caller: Address, delay_secs: u64) {
+        proxy::set_upgrade_delay(&env, &caller, delay_secs);
+    }
+
+    /// Transfer proxy admin rights to `new_admin`.
+    pub fn proxy_transfer_admin(env: Env, caller: Address, new_admin: Address) {
+        proxy::transfer_admin(&env, &caller, &new_admin);
+    }
+
+    /// Returns the current proxy state, or `None` if not initialised.
+    pub fn proxy_get_state(env: Env) -> Option<proxy::ProxyState> {
+        proxy::get_state(&env)
+    }
+
+    /// Returns the active storage layout version.
+    pub fn proxy_get_storage_version(env: Env) -> u32 {
+        proxy::get_storage_version(&env)
     }
 }
 

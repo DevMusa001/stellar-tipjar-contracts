@@ -24,10 +24,15 @@ base64 = "0.22"
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
 proptest = "1.4"
+criterion = "0.5"
 
 [[test]]
 name = "gas_benchmarks"
 path = "benches/gas_benchmarks.rs"
+
+[[bench]]
+name = "contract_bench"
+harness = false
 
 [[test]]
 name = "quickcheck_properties"
@@ -53,3 +58,47 @@ path = "tests/multisig_withdrawal_tests.rs"
 name = "options_trading_tests"
 path = "tests/options_trading_tests.rs"
 
+[[test]]
+name = "batch_operations_tests"
+path = "tests/batch_operations_tests.rs"
+
+[[test]]
+name = "liquidity_mining_tests"
+path = "tests/liquidity_mining_tests.rs"
+
+[[test]]
+name = "bonding_curve_tests"
+path = "tests/bonding_curve_tests.rs"
+
+[[test]]
+name = "twap_oracle_tests"
+path = "tests/twap_oracle_tests.rs"
+
+[[test]]
+name = "quadratic_funding_tests"
+path = "tests/quadratic_funding_tests.rs"
+
+[[test]]
+name = "poly_commit_tests"
+path = "tests/poly_commit_tests.rs"
+
+[[test]]
+name = "payment_channel_tests"
+path = "tests/payment_channel_tests.rs"
+
+[[test]]
+name = "rollup_tests"
+path = "tests/rollup_tests.rs"
+
+
+[[test]]
+name = "fractional_ownership_tests"
+path = "tests/fractional_ownership_tests.rs"
+
+[[test]]
+name = "royalty_split_tests"
+path = "tests/royalty_split_tests.rs"
+
+[[test]]
+name = "derivatives_tests"
+path = "tests/derivatives_tests.rs"

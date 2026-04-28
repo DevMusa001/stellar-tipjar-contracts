@@ -1,151 +1,79 @@
-//! Price calculation utilities for AMM
+//! Price and pool analytics for the AMM.
 
-use super::DataKey;
-use soroban_sdk::Env;
+use soroban_sdk::{panic_with_error, Address, Env};
 
-/// Get current price for token A in terms of token B
-pub fn get_price(
-    env: &Env,
-    pool_id: u64,
-    token_a: &soroban_sdk::Address,
-) -> i128 {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
+use crate::{DataKey, TipJarError};
 
-    if *token_a == pool.token_a {
-        // Price of token A in terms of token B
-        if pool.reserve_a == 0 {
-            return 0;
-        }
-        pool.reserve_b * 10000 / pool.reserve_a
-    } else if *token_a == pool.token_b {
-        // Price of token B in terms of token A
-        if pool.reserve_b == 0 {
-            return 0;
-        }
-        pool.reserve_a * 10000 / pool.reserve_b
+use super::{get_pool, swap::price_impact_bps};
+
+/// Spot price of `token_in` in terms of the other token, scaled × 1_000_000.
+///
+/// Returns `reserve_out / reserve_in × 1_000_000`.
+pub fn spot_price(env: &Env, pool_id: u64, token_in: &Address) -> i128 {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
+
+    let (reserve_in, reserve_out) = if *token_in == pool.token_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else if *token_in == pool.token_b {
+        (pool.reserve_b, pool.reserve_a)
     } else {
-        panic!("Token not in pool");
+        panic_with_error!(env, TipJarError::AmmTokenNotInPool)
+    };
+
+    if reserve_in == 0 {
+        return 0;
     }
+    reserve_out * 1_000_000 / reserve_in
 }
 
-/// Get pool liquidity value
-pub fn get_liquidity_value(
-    env: &Env,
-    pool_id: u64,
-) -> (i128, i128) {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
+/// Price impact in basis points for a hypothetical swap of `amount_in`.
+pub fn get_price_impact(env: &Env, pool_id: u64, token_in: &Address, amount_in: i128) -> i128 {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
 
+    let (reserve_in, reserve_out) = if *token_in == pool.token_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else if *token_in == pool.token_b {
+        (pool.reserve_b, pool.reserve_a)
+    } else {
+        panic_with_error!(env, TipJarError::AmmTokenNotInPool)
+    };
+
+    price_impact_bps(amount_in, reserve_in, reserve_out, pool.fee_bps)
+}
+
+/// Constant-product invariant k = reserve_a × reserve_b.
+pub fn get_invariant(env: &Env, pool_id: u64) -> i128 {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
+    pool.reserve_a * pool.reserve_b
+}
+
+/// Total value locked expressed as `(reserve_a, reserve_b)`.
+pub fn get_tvl(env: &Env, pool_id: u64) -> (i128, i128) {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
     (pool.reserve_a, pool.reserve_b)
 }
 
-/// Get pool utilization rate
-pub fn get_utilization_rate(
-    env: &Env,
-    pool_id: u64,
-) -> i128 {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
-
+/// LP share value: how much of each token one share is worth.
+/// Returns `(token_a_per_share × 1_000_000, token_b_per_share × 1_000_000)`.
+pub fn share_value(env: &Env, pool_id: u64) -> (i128, i128) {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
     if pool.total_shares == 0 {
-        return 0;
+        return (0, 0);
     }
-
-    // Utilization = (reserve_a + reserve_b) / total_shares * 10000
-    let total_value = pool.reserve_a + pool.reserve_b;
-    total_value * 10000 / pool.total_shares
+    (
+        pool.reserve_a * 1_000_000 / pool.total_shares,
+        pool.reserve_b * 1_000_000 / pool.total_shares,
+    )
 }
 
-/// Calculate optimal input amount for desired output
-pub fn calculate_optimal_input(
-    env: &Env,
-    pool_id: u64,
-    token_in: &soroban_sdk::Address,
-    desired_output: i128,
-) -> i128 {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
-
-    let (reserve_in, reserve_out) = if *token_in == pool.token_a {
-        (pool.reserve_a, pool.reserve_b)
-    } else if *token_in == pool.token_b {
-        (pool.reserve_b, pool.reserve_a)
-    } else {
-        panic!("Token not in pool");
-    };
-
-    if desired_output <= 0 || desired_output >= reserve_out {
-        return 0;
-    }
-
-    // Reverse calculation: amount_in = (reserve_in * desired_output) / (reserve_out - desired_output)
-    // Adjusted for fee
-    let numerator = reserve_in * desired_output * 10000;
-    let denominator = (reserve_out - desired_output) * (10000 - pool.fee_bps as i128);
-
-    numerator / denominator + 1 // Add 1 to ensure we get at least the desired output
-}
-
-/// Calculate optimal output amount for given input
-pub fn calculate_optimal_output(
-    env: &Env,
-    pool_id: u64,
-    token_in: &soroban_sdk::Address,
-    amount_in: i128,
-) -> i128 {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
-
-    let (reserve_in, reserve_out) = if *token_in == pool.token_a {
-        (pool.reserve_a, pool.reserve_b)
-    } else if *token_in == pool.token_b {
-        (pool.reserve_b, pool.reserve_a)
-    } else {
-        panic!("Token not in pool");
-    };
-
-    super::swap::calculate_output(amount_in, reserve_in, reserve_out, pool.fee_bps)
-}
-
-/// Get mid price (average of buy and sell prices)
-pub fn get_mid_price(
-    env: &Env,
-    pool_id: u64,
-    token_a: &soroban_sdk::Address,
-) -> i128 {
-    let pool: super::LiquidityPool = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Pool(pool_id))
-        .expect("Pool not found");
-
-    if pool.reserve_a == 0 || pool.reserve_b == 0 {
-        return 0;
-    }
-
-    if *token_a == pool.token_a {
-        // Mid price = (reserve_b / reserve_a) * 10000
-        pool.reserve_b * 10000 / pool.reserve_a
-    } else if *token_a == pool.token_b {
-        // Mid price = (reserve_a / reserve_b) * 10000
-        pool.reserve_a * 10000 / pool.reserve_b
-    } else {
-        panic!("Token not in pool");
-    }
+/// Total fees collected by the pool since creation.
+pub fn total_fees_collected(env: &Env, pool_id: u64) -> i128 {
+    let pool = get_pool(env, pool_id)
+        .unwrap_or_else(|| panic_with_error!(env, TipJarError::AmmPoolNotFound));
+    pool.total_fees_collected
 }

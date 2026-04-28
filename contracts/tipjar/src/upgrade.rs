@@ -1,6 +1,6 @@
 use soroban_sdk::{symbol_short, BytesN, Env};
 
-use crate::{storage, TipJarError};
+use crate::{storage, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError};
 
 /// Performs an admin-authorized WASM upgrade and bumps the on-chain version.
 ///
@@ -41,7 +41,7 @@ pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
         .storage()
         .instance()
         .get(&crate::DataKey::Admin)
-        .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, TipJarError::UpgradeUnauthorized));
+        .unwrap_or_else(|| soroban_sdk::panic_with_error!(env, SystemError::UpgradeUnauthorized));
     admin.require_auth();
 
     let new_version = storage::get_contract_version(env).saturating_add(1);
@@ -60,3 +60,6 @@ pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
 pub fn get_version(env: &Env) -> u32 {
     storage::get_contract_version(env)
 }
+
+
+

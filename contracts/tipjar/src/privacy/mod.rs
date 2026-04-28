@@ -1,5 +1,9 @@
 pub mod commitment;
 pub mod zk_proof;
+pub mod homomorphic;
+pub mod key_management;
+pub mod encrypted_operations;
+pub mod contract_interface;
 
 use soroban_sdk::{contracttype, Address, BytesN};
 

@@ -5,6 +5,8 @@
 pub mod proposals;
 pub mod voting;
 pub mod timelock;
+pub mod conviction;
+pub mod conviction_integration;
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 

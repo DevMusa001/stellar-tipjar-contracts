@@ -2,7 +2,7 @@
 
 use soroban_sdk::{panic_with_error, token, Address, Env};
 
-use crate::{DataKey, TipJarError};
+use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
 
 use super::{rewards, FarmingPool, FarmingPosition};
 
@@ -35,7 +35,7 @@ pub fn create_pool(
 /// Stakes LP tokens into a pool.
 pub fn stake(env: &Env, staker: &Address, pool_id: u64, amount: i128) {
     if amount <= 0 {
-        panic_with_error!(env, TipJarError::InvalidAmount);
+        panic_with_error!(env, CoreError::InvalidAmount);
     }
 
     let mut pool = get_pool_or_panic(env, pool_id);
@@ -81,14 +81,14 @@ pub fn harvest(env: &Env, staker: &Address, pool_id: u64) -> i128 {
 /// Unstakes LP tokens from a pool after lock period.
 pub fn unstake(env: &Env, staker: &Address, pool_id: u64, amount: i128) {
     if amount <= 0 {
-        panic_with_error!(env, TipJarError::InvalidAmount);
+        panic_with_error!(env, CoreError::InvalidAmount);
     }
 
     let mut pool = get_pool_or_panic(env, pool_id);
     let mut position = get_position_or_panic(env, pool_id, staker);
 
     if amount > position.amount {
-        panic_with_error!(env, TipJarError::InsufficientBalance);
+        panic_with_error!(env, CoreError::InsufficientBalance);
     }
 
     let now = env.ledger().timestamp();
@@ -154,3 +154,7 @@ fn next_pool_id(env: &Env) -> u64 {
         .set(&DataKey::FarmingPoolCounter, &next);
     next
 }
+
+
+
+

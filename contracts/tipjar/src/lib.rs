@@ -85,8 +85,14 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
-// Access control lists for tip operations
-pub mod acl;
+// Tip state channels (off-chain tips with on-chain settlement)
+pub mod state_channel;
+
+// Meta-transactions for gasless tipping
+pub mod meta_tx;
+
+// Royalty splits for collaborative content and team tips
+pub mod royalty;
 
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
@@ -854,16 +860,30 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
-    /// ACL role assigned to an address.
-    AclRole(Address),
-    /// Explicit permission flag keyed by (subject, permission_string).
-    AclPermission(Address, String),
-    /// ACL change history entry keyed by index.
-    AclChangeLog(u64),
-    /// Total number of ACL change history entries.
-    AclChangeCount,
-    /// Custom role definition keyed by role name.
-    AclCustomRole(String),
+    /// Tip state channel record keyed by (tipper, creator, token).
+    TipChannel(Address, Address, Address),
+    /// Individual tip entry within a state channel keyed by (tipper, creator, token, index).
+    TipChannelEntry(Address, Address, Address, u64),
+    /// Per-sender meta-transaction nonce keyed by sender address.
+    MetaTxNonce(Address),
+    /// Trusted relayer flag keyed by relayer address.
+    MetaTxRelayer(Address),
+    /// Consumed request nullifier keyed by request hash (replay protection).
+    MetaTxNullifier(BytesN<32>),
+    /// Meta-transaction execution record keyed by record ID.
+    MetaTxRecord(u64),
+    /// Global meta-transaction record counter.
+    MetaTxCounter,
+    /// Commit-reveal round keyed by round ID.
+    CommitRevealRound(u64),
+    /// Commitment keyed by (round_id, participant).
+    CommitRevealCommitment(u64, Address),
+    /// Reveal keyed by (round_id, participant).
+    CommitRevealReveal(u64, Address),
+    /// List of round IDs created by a creator.
+    CommitRevealCreatorRounds(Address),
+    /// Global commit-reveal round counter.
+    CommitRevealCounter,
 }
 
 #[contracterror]
@@ -1181,7 +1201,92 @@ pub enum ChannelError {
     InvalidDisputeWindow = 208,
 }
 
+/// Errors specific to tip state channels.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum TipChannelError {
+    /// No tip channel exists for the given parties and token.
+    ChannelNotFound = 300,
+    /// Channel is not in the Open state.
+    ChannelNotOpen = 301,
+    /// Provided nonce is not strictly greater than the current nonce.
+    StaleNonce = 302,
+    /// Caller is not a party to this channel.
+    NotChannelParty = 303,
+    /// Deposit amount must be greater than zero.
+    InvalidDeposit = 304,
+    /// Dispute window must be greater than zero.
+    InvalidDisputeWindow = 305,
+    /// Tipped amount exceeds the channel deposit.
+    ExceedsDeposit = 306,
+    /// Tipped amount cannot decrease.
+    TippedAmountDecreased = 307,
+    /// Channel is already settled.
+    AlreadySettled = 308,
+}
 
+/// Errors for meta-transaction (gasless tip) operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum MetaTxError {
+    /// Relayer is not in the trusted relayer set.
+    UntrustedRelayer = 400,
+    /// Signed request has passed its `valid_until` timestamp.
+    RequestExpired = 401,
+    /// Provided nonce does not match the stored per-sender nonce.
+    InvalidNonce = 402,
+    /// This request hash has already been executed (replay attempt).
+    AlreadyExecuted = 403,
+    /// Ed25519 signature verification failed.
+    InvalidSignature = 404,
+    /// Tip amount in the request is invalid (≤ 0).
+    InvalidAmount = 405,
+    /// Token in the request is not whitelisted.
+    TokenNotWhitelisted = 406,
+    /// Relayer is already registered.
+    RelayerAlreadyRegistered = 407,
+    /// Relayer is not registered (cannot remove).
+    RelayerNotFound = 408,
+}
+
+/// Errors for commit-reveal operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum CommitRevealError {
+    /// Round not found.
+    RoundNotFound = 500,
+    /// Round is not in the commit phase.
+    NotInCommitPhase = 501,
+    /// Round is not in the reveal phase.
+    NotInRevealPhase = 502,
+    /// Commit phase has not started yet.
+    CommitPhaseNotStarted = 503,
+    /// Commit phase has ended.
+    CommitPhaseEnded = 504,
+    /// Reveal phase has ended.
+    RevealPhaseEnded = 505,
+    /// Participant has already committed.
+    AlreadyCommitted = 506,
+    /// Participant has already revealed.
+    AlreadyRevealed = 507,
+    /// No commitment found for this participant.
+    NoCommitment = 508,
+    /// Revealed value does not match commitment hash.
+    InvalidReveal = 509,
+    /// Round is already finalized or cancelled.
+    RoundNotActive = 510,
+    /// Commit duration is invalid (too short or too long).
+    InvalidCommitDuration = 511,
+    /// Reveal duration is invalid (too short or too long).
+    InvalidRevealDuration = 512,
+    /// Reveal phase has not ended yet.
+    RevealPhaseNotEnded = 513,
+    /// Commit phase has not ended yet.
+    CommitPhaseNotEnded = 514,
+}
 
 #[contract]
 pub struct TipJarContract;
@@ -8793,6 +8898,576 @@ a
             .get(&DataKey::PaymentChannel(party_a, party_b, token))
     }
 
+    // ── tip state channels ───────────────────────────────────────────────────
+
+    /// Opens a tip state channel between `tipper` and `creator`.
+    ///
+    /// Transfers `deposit` from `tipper` into contract escrow.
+    /// Emits `("tch_open",)` with `(tipper, creator, token, deposit)`.
+    pub fn open_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        deposit: i128,
+        dispute_window: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        if deposit <= 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDeposit);
+        }
+        if dispute_window == 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDisputeWindow);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::open(&env, &tipper, &creator, &token, deposit, dispute_window);
+    }
+
+    /// Records an off-chain tip state update. Both parties must authorise.
+    ///
+    /// `new_tipped_amount` is the new cumulative total; `nonce` must be strictly greater.
+    /// Emits `("tch_tip",)` with `(tipper, creator, token, tip_amount, nonce)`.
+    pub fn record_channel_tip(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        new_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+        if nonce <= channel.nonce {
+            panic_with_error!(&env, TipChannelError::StaleNonce);
+        }
+        if new_tipped_amount < channel.tipped_amount {
+            panic_with_error!(&env, TipChannelError::TippedAmountDecreased);
+        }
+        if new_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::record_tip(&env, &tipper, &creator, &token, new_tipped_amount, nonce);
+    }
+
+    /// Cooperatively settles a tip channel. Both parties must authorise.
+    ///
+    /// Distributes `tipped_amount` to creator and remainder to tipper.
+    /// Emits `("tch_setl",)` with `(tipper, creator, token, to_creator, to_tipper)`.
+    pub fn settle_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::settle(&env, &tipper, &creator, &token);
+    }
+
+    /// Initiates or finalises a unilateral dispute close on a tip channel.
+    ///
+    /// First call: sets status to `Disputed`, records claimed state.
+    /// Second call (counterparty, within window): may submit a newer state.
+    /// After window: anyone may finalise.
+    /// Emits `("tch_disp",)` on initiation/update and `("tch_fin",)` on finalisation.
+    pub fn dispute_tip_channel(
+        env: Env,
+        caller: Address,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        claimed_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if caller != channel.tipper && caller != channel.creator {
+            panic_with_error!(&env, TipChannelError::NotChannelParty);
+        }
+        if channel.status == state_channel::TipChannelStatus::Settled {
+            panic_with_error!(&env, TipChannelError::AlreadySettled);
+        }
+        if claimed_tipped_amount < 0 || claimed_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::dispute(
+            &env,
+            &caller,
+            &tipper,
+            &creator,
+            &token,
+            claimed_tipped_amount,
+            nonce,
+        );
+    }
+
+    /// Returns the tip state channel for `(tipper, creator, token)`.
+    pub fn get_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Option<state_channel::TipStateChannel> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TipChannel(tipper, creator, token))
+    }
+
+    /// Returns all recorded tip entries for a tip state channel.
+    pub fn get_tip_channel_tips(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Vec<state_channel::ChannelTip> {
+        state_channel::get_channel_tips(&env, &tipper, &creator, &token)
+    }
+
+    // ── meta-transactions (gasless tipping) ──────────────────────────────────
+
+    /// Registers a trusted relayer for meta-transactions. Admin only.
+    ///
+    /// Emits `("mtx_reg",)` with `(relayer)`.
+    pub fn register_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerAlreadyRegistered);
+        }
+
+        meta_tx::register_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_reg"),),
+            (relayer,),
+        );
+    }
+
+    /// Removes a trusted relayer. Admin only.
+    ///
+    /// Emits `("mtx_rem",)` with `(relayer)`.
+    pub fn remove_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if !meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerNotFound);
+        }
+
+        meta_tx::remove_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_rem"),),
+            (relayer,),
+        );
+    }
+
+    /// Executes a meta-transaction tip on behalf of a user.
+    ///
+    /// The relayer submits a signed `MetaTipRequest`. The contract verifies:
+    ///   - Relayer is trusted
+    ///   - Request has not expired
+    ///   - Nonce matches the stored per-sender nonce
+    ///   - Signature is valid
+    ///   - Request has not been replayed
+    ///
+    /// On success, executes the tip (or channel open) and increments the sender's nonce.
+    /// Returns the meta-tx record ID.
+    ///
+    /// Emits `("mtx_exec",)` with `(record_id, from, relayer, to, amount, nonce)`.
+    pub fn execute_meta_tip(
+        env: Env,
+        relayer: Address,
+        request: meta_tx::MetaTipRequest,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        relayer.require_auth();
+
+        // Validate amount
+        if request.amount <= 0 {
+            panic_with_error!(&env, MetaTxError::InvalidAmount);
+        }
+
+        // Validate token whitelist
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(request.token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, MetaTxError::TokenNotWhitelisted);
+        }
+
+        // Verify signature and replay protection
+        let hash = meta_tx::verify(&env, &relayer, &request);
+
+        // Execute the action based on request type
+        match request.action {
+            meta_tx::MetaTipAction::Tip => {
+                // Transfer tokens from `from` to contract
+                token::Client::new(&env, &request.token).transfer(
+                    &request.from,
+                    &env.current_contract_address(),
+                    &request.amount,
+                );
+
+                // Credit creator balance
+                let key = DataKey::CreatorBalance(request.to.clone(), request.token.clone());
+                let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&key, &(current + request.amount));
+
+                // Update creator total
+                let total_key = DataKey::CreatorTotal(request.to.clone(), request.token.clone());
+                let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&total_key, &(total + request.amount));
+
+                // Emit tip event
+                env.events().publish(
+                    (symbol_short!("tip"),),
+                    (request.from.clone(), request.to.clone(), request.token.clone(), request.amount),
+                );
+            }
+            meta_tx::MetaTipAction::OpenChannel => {
+                // Open a tip state channel
+                let key = DataKey::TipChannel(
+                    request.from.clone(),
+                    request.to.clone(),
+                    request.token.clone(),
+                );
+                if env.storage().persistent().has(&key) {
+                    panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+                }
+
+                // Default dispute window: 1 hour
+                let dispute_window = 3600u64;
+                state_channel::open(
+                    &env,
+                    &request.from,
+                    &request.to,
+                    &request.token,
+                    request.amount,
+                    dispute_window,
+                );
+            }
+        }
+
+        // Finalize: mark consumed, bump nonce, store record
+        meta_tx::finalize(&env, &relayer, &request, &hash)
+    }
+
+    /// Returns the current meta-transaction nonce for a sender.
+    pub fn get_meta_nonce(env: Env, sender: Address) -> u64 {
+        meta_tx::get_nonce(&env, &sender)
+    }
+
+    /// Returns whether a relayer is trusted for meta-transactions.
+    pub fn is_meta_relayer(env: Env, relayer: Address) -> bool {
+        meta_tx::is_trusted_relayer(&env, &relayer)
+    }
+
+    /// Returns a meta-transaction execution record by ID.
+    pub fn get_meta_record(env: Env, record_id: u64) -> Option<meta_tx::MetaTxRecord> {
+        meta_tx::get_record(&env, record_id)
+    }
+
+    // ── commit-reveal (fair auctions & voting) ───────────────────────────────
+
+    /// Creates a new commit-reveal round.
+    ///
+    /// Returns the round ID.
+    /// Emits `("cr_new",)` with `(round_id, creator, timestamp)`.
+    pub fn create_commit_reveal_round(
+        env: Env,
+        creator: Address,
+        round_type: commit_reveal::RoundType,
+        commit_duration: u64,
+        reveal_duration: u64,
+        description: String,
+        token: Option<Address>,
+        min_bid: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if commit_duration < commit_reveal::MIN_COMMIT_DURATION
+            || commit_duration > commit_reveal::MAX_COMMIT_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidCommitDuration);
+        }
+        if reveal_duration < commit_reveal::MIN_REVEAL_DURATION
+            || reveal_duration > commit_reveal::MAX_REVEAL_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidRevealDuration);
+        }
+
+        commit_reveal::create_round(
+            &env,
+            &creator,
+            round_type,
+            commit_duration,
+            reveal_duration,
+            description,
+            token,
+            min_bid,
+        )
+    }
+
+    /// Submits a commitment during the commit phase.
+    ///
+    /// `commitment_hash` should be SHA256(value || salt).
+    /// Emits `("cr_cmt",)` with `(round_id, participant, commitment_hash)`.
+    pub fn commit_to_round(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        commitment_hash: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_start {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotStarted);
+        }
+        if now >= round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseEnded);
+        }
+
+        let key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, CommitRevealError::AlreadyCommitted);
+        }
+
+        commit_reveal::commit(&env, round_id, &participant, commitment_hash);
+    }
+
+    /// Advances a round from Committing to Revealing status.
+    ///
+    /// Can be called by anyone once the commit phase has ended.
+    /// Emits `("cr_rvl",)` with `(round_id)`.
+    pub fn start_reveal_phase(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotEnded);
+        }
+
+        commit_reveal::start_reveal_phase(&env, round_id);
+    }
+
+    /// Reveals a commitment during the reveal phase.
+    ///
+    /// Verifies that `SHA256(value || salt) == commitment_hash`.
+    /// Emits `("cr_rvld",)` with `(round_id, participant, value)`.
+    pub fn reveal_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        value: i128,
+        salt: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseEnded);
+        }
+
+        let commit_key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        let commitment: Option<commit_reveal::Commitment> =
+            env.storage().persistent().get(&commit_key);
+        if commitment.is_none() {
+            panic_with_error!(&env, CommitRevealError::NoCommitment);
+        }
+        let commitment = commitment.unwrap();
+
+        if commitment.revealed {
+            panic_with_error!(&env, CommitRevealError::AlreadyRevealed);
+        }
+
+        let computed = commit_reveal::compute_commitment(&env, value, &salt);
+        if computed != commitment.commitment_hash {
+            panic_with_error!(&env, CommitRevealError::InvalidReveal);
+        }
+
+        commit_reveal::reveal(&env, round_id, &participant, value, salt);
+    }
+
+    /// Finalizes a round after the reveal phase ends.
+    ///
+    /// For auctions: determines the winner (highest bid).
+    /// Can be called by anyone once the reveal phase has ended.
+    /// Emits `("cr_fin",)` with `(round_id, winner, winning_bid)`.
+    pub fn finalize_commit_reveal_round(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseNotEnded);
+        }
+
+        commit_reveal::finalize_round(&env, round_id);
+    }
+
+    /// Cancels a round. Creator or admin only.
+    ///
+    /// Emits `("cr_cncl",)` with `(round_id)`.
+    pub fn cancel_commit_reveal_round(env: Env, caller: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != round.creator && caller != admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if round.status == commit_reveal::RoundStatus::Finalized
+            || round.status == commit_reveal::RoundStatus::Cancelled
+        {
+            panic_with_error!(&env, CommitRevealError::RoundNotActive);
+        }
+
+        commit_reveal::cancel_round(&env, round_id);
+    }
+
+    /// Returns a commit-reveal round by ID.
+    pub fn get_commit_reveal_round(
+        env: Env,
+        round_id: u64,
+    ) -> Option<commit_reveal::CommitRevealRound> {
+        commit_reveal::get_round(&env, round_id)
+    }
+
+    /// Returns a commitment for a participant in a round.
+    pub fn get_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Commitment> {
+        commit_reveal::get_commitment(&env, round_id, &participant)
+    }
+
+    /// Returns a reveal for a participant in a round.
+    pub fn get_reveal(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Reveal> {
+        commit_reveal::get_reveal(&env, round_id, &participant)
+    }
+
+    /// Returns all round IDs created by a creator.
+    pub fn get_creator_commit_reveal_rounds(env: Env, creator: Address) -> Vec<u64> {
+        commit_reveal::get_creator_rounds(&env, &creator)
+    }
+
     // ── optimistic rollup ────────────────────────────────────────────────────
 
     /// Initialize the rollup with a designated sequencer.
@@ -8877,57 +9552,110 @@ a
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
     }
 
-    // ── access control lists ─────────────────────────────────────────────────
+    // ── fractional ownership ─────────────────────────────────────────────────
 
-    /// Assign a built-in or custom role to `subject`. Caller must be admin or
-    /// hold a strictly higher role level than the role being assigned.
-    pub fn acl_assign_role(env: Env, caller: Address, subject: Address, role_name: String) {
-        acl::assign_role(&env, &caller, &subject, &role_name);
+    /// Mint `total_supply` fractions for `creator`.
+    pub fn mint_fractions(
+        env: Env,
+        creator: Address,
+        total_supply: u64,
+        buyout_price_per_fraction: i128,
+    ) {
+        fractional_ownership::mint_fractions(&env, &creator, total_supply, buyout_price_per_fraction);
     }
 
-    /// Revoke the role of `subject`. Caller must be admin or hold a higher level.
-    pub fn acl_revoke_role(env: Env, caller: Address, subject: Address) {
-        acl::revoke_role(&env, &caller, &subject);
+    /// Record `amount` of revenue for `creator`'s fraction pool.
+    pub fn accrue_revenue(env: Env, creator: Address, amount: i128) {
+        fractional_ownership::accrue_revenue(&env, &creator, amount);
     }
 
-    /// Define a new custom role (admin only).
-    pub fn acl_define_custom_role(env: Env, caller: Address, role_name: String, level: u32) {
-        acl::define_custom_role(&env, &caller, &role_name, level);
+    /// Claim accumulated revenue for `holder` in `creator`'s pool.
+    pub fn claim_fraction_revenue(env: Env, creator: Address, holder: Address) -> i128 {
+        fractional_ownership::claim_revenue(&env, &creator, &holder)
     }
 
-    /// Grant an explicit permission string to `subject`.
-    pub fn acl_grant_permission(env: Env, caller: Address, subject: Address, permission: String) {
-        acl::grant_permission(&env, &caller, &subject, &permission);
+    /// Transfer `amount` fractions from `from` to `to`.
+    pub fn transfer_fractions(
+        env: Env,
+        creator: Address,
+        from: Address,
+        to: Address,
+        amount: u64,
+    ) {
+        fractional_ownership::transfer_fractions(&env, &creator, &from, &to, amount);
     }
 
-    /// Revoke an explicit permission from `subject`.
-    pub fn acl_revoke_permission(env: Env, caller: Address, subject: Address, permission: String) {
-        acl::revoke_permission(&env, &caller, &subject, &permission);
+    /// Buy out all fractions not held by `buyer`. Returns total cost.
+    pub fn buyout_fractions(env: Env, creator: Address, buyer: Address) -> i128 {
+        fractional_ownership::buyout(&env, &creator, &buyer)
     }
 
-    /// Returns `true` if `subject` has the explicit `permission`.
-    pub fn acl_check_permission(env: Env, subject: Address, permission: String) -> bool {
-        acl::check_permission(&env, &subject, &permission)
+    /// Returns the fraction pool for `creator`.
+    pub fn get_fraction_pool(
+        env: Env,
+        creator: Address,
+    ) -> Option<fractional_ownership::FractionPool> {
+        fractional_ownership::get_pool(&env, &creator)
     }
 
-    /// Returns the role assigned to `subject`, or `None`.
-    pub fn acl_get_role(env: Env, subject: Address) -> Option<acl::AclRole> {
-        acl::get_role(&env, &subject)
+    /// Returns the fraction position for `holder` in `creator`'s pool.
+    pub fn get_fraction_position(
+        env: Env,
+        creator: Address,
+        holder: Address,
+    ) -> fractional_ownership::FractionPosition {
+        fractional_ownership::get_position(&env, &creator, &holder)
     }
 
-    /// Returns `true` if `subject`'s role level is >= `required_level`.
-    pub fn acl_has_min_level(env: Env, subject: Address, required_level: u32) -> bool {
-        acl::has_min_level(&env, &subject, required_level)
+    // ── royalty splits ───────────────────────────────────────────────────────
+
+    /// Create or replace a split configuration for `split_id`.
+    pub fn set_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::set_split(&env, &split_id, &owner, recipients);
     }
 
-    /// Returns a change history entry by index.
-    pub fn acl_get_change_entry(env: Env, index: u64) -> Option<acl::AclChangeEntry> {
-        acl::get_change_entry(&env, index)
+    /// Modify an existing split configuration (owner only).
+    pub fn modify_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::modify_split(&env, &split_id, &owner, recipients);
     }
 
-    /// Returns the total number of ACL change history entries.
-    pub fn acl_get_change_count(env: Env) -> u64 {
-        acl::get_change_count(&env)
+    /// Distribute `amount` according to the split config for `split_id`.
+    pub fn distribute_split(env: Env, split_id: Address, amount: i128) -> i128 {
+        royalty::distribute(&env, &split_id, amount)
+    }
+
+    /// Returns the split config for `split_id`.
+    pub fn get_split(env: Env, split_id: Address) -> Option<royalty::SplitConfig> {
+        royalty::get_split(&env, &split_id)
+    }
+
+    /// Returns a split history entry by index.
+    pub fn get_split_history_entry(
+        env: Env,
+        split_id: Address,
+        index: u64,
+    ) -> Option<royalty::SplitHistoryEntry> {
+        royalty::get_history_entry(&env, &split_id, index)
+    }
+
+    /// Returns the total number of distribution history entries for `split_id`.
+    pub fn get_split_history_count(env: Env, split_id: Address) -> u64 {
+        royalty::get_history_count(&env, &split_id)
+    }
+
+    /// Returns the accumulated split balance for `recipient`.
+    pub fn get_split_balance(env: Env, recipient: Address) -> i128 {
+        royalty::get_balance(&env, &recipient)
     }
 }
 

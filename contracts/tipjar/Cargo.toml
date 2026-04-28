@@ -92,5 +92,9 @@ path = "tests/rollup_tests.rs"
 
 
 [[test]]
-name = "acl_tests"
-path = "tests/acl_tests.rs"
+name = "fractional_ownership_tests"
+path = "tests/fractional_ownership_tests.rs"
+
+[[test]]
+name = "royalty_split_tests"
+path = "tests/royalty_split_tests.rs"

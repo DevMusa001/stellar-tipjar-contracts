@@ -98,3 +98,7 @@ path = "tests/fractional_ownership_tests.rs"
 [[test]]
 name = "royalty_split_tests"
 path = "tests/royalty_split_tests.rs"
+
+[[test]]
+name = "derivatives_tests"
+path = "tests/derivatives_tests.rs"

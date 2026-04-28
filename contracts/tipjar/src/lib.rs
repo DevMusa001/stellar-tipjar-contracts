@@ -49,6 +49,9 @@ pub mod options;
 // Tip Index Funds
 pub mod index_fund;
 
+// Tip Time-Lock Puzzles
+pub mod time_lock_puzzle;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -685,6 +688,14 @@ pub enum DataKey {
     IndexFundShare(u64, Address),
     /// Creator allocation within a fund keyed by (fund_id, creator).
     IndexCreatorAlloc(u64, Address),
+    /// Time-lock puzzle record by ID.
+    TimeLockPuzzle(u64),
+    /// Global time-lock puzzle counter.
+    TimeLockPuzzleCounter,
+    /// List of puzzle IDs created by an address.
+    CreatorPuzzles(Address),
+    /// List of puzzle IDs targeting a recipient.
+    RecipientPuzzles(Address),
 }
 
 #[contracterror]
@@ -877,6 +888,20 @@ pub enum TipJarError {
     IndexDepositTooSmall = 103,
     /// Attempted to unpause a contract that is not currently paused.
     NotPaused = 104,
+    /// Time-lock puzzle not found.
+    PuzzleNotFound = 105,
+    /// Puzzle is not in Active status.
+    PuzzleNotActive = 106,
+    /// Puzzle unlock time has not been reached yet.
+    PuzzleTooEarly = 107,
+    /// Supplied secret/nonce does not match the puzzle commitment.
+    PuzzleWrongSolution = 108,
+    /// Puzzle has already been solved.
+    PuzzleAlreadySolved = 109,
+    /// Puzzle has been cancelled.
+    PuzzleCancelled = 110,
+    /// Caller is not the puzzle creator.
+    PuzzleUnauthorized = 111,
 }
 
 #[contract]
@@ -5821,5 +5846,185 @@ impl TipJarContract {
         fund_id: u64,
     ) -> Vec<(Address, i128)> {
         index_fund::rebalance::get_allocations(&env, fund_id)
+    }
+
+    // ── Time-Lock Puzzles ────────────────────────────────────────────────────
+
+    /// Create a time-lock puzzle wrapping a tip.
+    ///
+    /// The caller must supply a `commitment` = SHA-256(secret XOR nonce) computed
+    /// off-chain. The `secret` and `nonce` are never stored on-chain; only the
+    /// commitment is persisted. The tip amount is transferred from `creator` to
+    /// the contract and held until the puzzle is solved.
+    ///
+    /// Returns the new puzzle ID.
+    pub fn create_time_lock_puzzle(
+        env: Env,
+        creator: Address,
+        recipient: Address,
+        token: Address,
+        amount: i128,
+        commitment: BytesN<32>,
+        unlock_time: u64,
+        difficulty: time_lock_puzzle::PuzzleDifficulty,
+        custom_iterations: Option<u64>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if unlock_time <= env.ledger().timestamp() {
+            panic_with_error!(&env, TipJarError::InvalidUnlockTime);
+        }
+
+        // Transfer tip amount from creator to contract.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&creator, &env.current_contract_address(), &amount);
+
+        let iterations =
+            time_lock_puzzle::puzzle::calculate_iterations(difficulty, custom_iterations);
+
+        let id = time_lock_puzzle::next_puzzle_id(&env);
+        let puzzle = time_lock_puzzle::TimeLockPuzzle {
+            id,
+            creator: creator.clone(),
+            recipient: recipient.clone(),
+            token,
+            amount,
+            commitment,
+            iterations,
+            unlock_time,
+            created_at: env.ledger().timestamp(),
+            difficulty,
+            status: time_lock_puzzle::PuzzleStatus::Active,
+        };
+
+        time_lock_puzzle::save_puzzle(&env, &puzzle);
+        time_lock_puzzle::add_creator_puzzle(&env, &creator, id);
+        time_lock_puzzle::add_recipient_puzzle(&env, &recipient, id);
+
+        env.events().publish(
+            (symbol_short!("tlp_new"),),
+            (creator, recipient, id, amount, unlock_time),
+        );
+
+        id
+    }
+
+    /// Solve a time-lock puzzle and release the tip to the recipient.
+    ///
+    /// The solver supplies the original `secret` and `nonce` used to generate
+    /// the commitment. On success the tip is transferred to the recipient.
+    pub fn solve_time_lock_puzzle(
+        env: Env,
+        puzzle_id: u64,
+        secret: BytesN<32>,
+        nonce: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+
+        let puzzle = time_lock_puzzle::get_puzzle(&env, puzzle_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PuzzleNotFound));
+
+        use time_lock_puzzle::solver::{solve_puzzle, SolveResult};
+        match solve_puzzle(&env, puzzle_id, &secret, &nonce) {
+            SolveResult::Success => {}
+            SolveResult::TooEarly => panic_with_error!(&env, TipJarError::PuzzleTooEarly),
+            SolveResult::WrongSolution => {
+                panic_with_error!(&env, TipJarError::PuzzleWrongSolution)
+            }
+            SolveResult::NotActive => match puzzle.status {
+                time_lock_puzzle::PuzzleStatus::Solved => {
+                    panic_with_error!(&env, TipJarError::PuzzleAlreadySolved)
+                }
+                time_lock_puzzle::PuzzleStatus::Cancelled => {
+                    panic_with_error!(&env, TipJarError::PuzzleCancelled)
+                }
+                _ => panic_with_error!(&env, TipJarError::PuzzleNotActive),
+            },
+        }
+
+        // Release tip to recipient.
+        let token_client = token::Client::new(&env, &puzzle.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &puzzle.recipient,
+            &puzzle.amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("tlp_slv"),),
+            (puzzle_id, puzzle.recipient, puzzle.amount),
+        );
+    }
+
+    /// Cancel an active time-lock puzzle and refund the tip to the creator.
+    ///
+    /// Only the puzzle creator may cancel.
+    pub fn cancel_time_lock_puzzle(env: Env, creator: Address, puzzle_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let puzzle = time_lock_puzzle::get_puzzle(&env, puzzle_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PuzzleNotFound));
+
+        if puzzle.creator != creator {
+            panic_with_error!(&env, TipJarError::PuzzleUnauthorized);
+        }
+
+        if !time_lock_puzzle::solver::cancel_puzzle(&env, puzzle_id) {
+            match puzzle.status {
+                time_lock_puzzle::PuzzleStatus::Solved => {
+                    panic_with_error!(&env, TipJarError::PuzzleAlreadySolved)
+                }
+                _ => panic_with_error!(&env, TipJarError::PuzzleNotActive),
+            }
+        }
+
+        // Refund tip to creator.
+        let token_client = token::Client::new(&env, &puzzle.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &puzzle.creator,
+            &puzzle.amount,
+        );
+
+        env.events().publish(
+            (symbol_short!("tlp_cnl"),),
+            (puzzle_id, creator, puzzle.amount),
+        );
+    }
+
+    /// Get a time-lock puzzle record by ID.
+    pub fn get_time_lock_puzzle(
+        env: Env,
+        puzzle_id: u64,
+    ) -> Option<time_lock_puzzle::TimeLockPuzzle> {
+        time_lock_puzzle::get_puzzle(&env, puzzle_id)
+    }
+
+    /// Get the status of a time-lock puzzle.
+    pub fn get_puzzle_status(
+        env: Env,
+        puzzle_id: u64,
+    ) -> Option<time_lock_puzzle::PuzzleStatus> {
+        time_lock_puzzle::solver::get_puzzle_status(&env, puzzle_id)
+    }
+
+    /// Check whether a puzzle's unlock time has been reached.
+    pub fn is_puzzle_unlocked(env: Env, puzzle_id: u64) -> bool {
+        time_lock_puzzle::solver::is_puzzle_unlocked(&env, puzzle_id)
+    }
+
+    /// List all puzzle IDs created by an address.
+    pub fn get_creator_puzzles(env: Env, creator: Address) -> Vec<u64> {
+        time_lock_puzzle::get_creator_puzzles(&env, &creator)
+    }
+
+    /// List all puzzle IDs targeting a recipient.
+    pub fn get_recipient_puzzles(env: Env, recipient: Address) -> Vec<u64> {
+        time_lock_puzzle::get_recipient_puzzles(&env, &recipient)
     }
 }

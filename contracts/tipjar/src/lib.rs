@@ -227,6 +227,20 @@ pub struct BatchResult {
     pub index: u32,
 }
 
+/// Cumulative statistics for all `batch_tip_multi` calls.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchStats {
+    /// Total number of `batch_tip_multi` invocations.
+    pub total_batches: u64,
+    /// Total number of individual tip operations that succeeded.
+    pub total_tips: u64,
+    /// Total token amount successfully tipped across all batches.
+    pub total_amount: i128,
+    /// Total number of operations that were skipped due to validation failure.
+    pub total_skipped: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LockedTip {
@@ -5441,6 +5455,147 @@ impl TipJarContract {
         );
 
         results
+    }
+
+    /// Sends multiple tips in a single transaction with partial failure handling.
+    ///
+    /// Unlike `batch_tip_v2`, invalid operations (zero/negative amount, unwhitelisted
+    /// token) are **skipped** rather than causing the entire batch to revert.
+    /// Each operation is transferred individually so only valid ops consume tokens.
+    ///
+    /// Batch size is capped at 20. Returns per-operation results indicating success
+    /// or skip. Updates cumulative `BatchStats` stored under `symbol_short!("bt_stats")`.
+    ///
+    /// Emits `("btp_multi",)` with data `(tipper, success_count, skipped_count, total_amount)`.
+    pub fn batch_tip_multi(
+        env: Env,
+        tipper: Address,
+        operations: Vec<TipOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(0);
+
+        let contract_address = env.current_contract_address();
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let mut success_count: u64 = 0;
+        let mut skipped_count: u64 = 0;
+        let mut grand_total: i128 = 0;
+
+        for (index, op) in operations.iter().enumerate() {
+            let idx = index as u32;
+
+            // Validate — skip instead of panic.
+            if op.amount <= 0 {
+                results.push_back(BatchResult { success: false, index: idx });
+                skipped_count += 1;
+                continue;
+            }
+            let whitelisted: bool = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenWhitelist(op.token.clone()))
+                .unwrap_or(false);
+            if !whitelisted {
+                results.push_back(BatchResult { success: false, index: idx });
+                skipped_count += 1;
+                continue;
+            }
+
+            // Transfer this op's tokens individually (CEI: transfer before state update).
+            token::Client::new(&env, &op.token).transfer(
+                &tipper,
+                &contract_address,
+                &op.amount,
+            );
+
+            let fee: i128 = (op.amount * fee_bp as i128) / 10_000;
+            let creator_amount = op.amount - fee;
+
+            if fee > 0 {
+                let fee_key = DataKey::PlatformFeeBalance(op.token.clone());
+                let new_fee: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&fee_key)
+                    .unwrap_or(0i128)
+                    .saturating_add(fee);
+                env.storage().instance().set(&fee_key, &new_fee);
+            }
+
+            let bal_key = DataKey::CreatorBalance(op.creator.clone(), op.token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&bal_key, &existing_bal.saturating_add(creator_amount));
+
+            let tot_key = DataKey::CreatorTotal(op.creator.clone(), op.token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&tot_key, &existing_tot.saturating_add(creator_amount));
+
+            Self::update_leaderboard_stats(&env, &tipper, &op.creator, creator_amount);
+
+            env.events().publish(
+                (symbol_short!("btp_mop"),),
+                (tipper.clone(), op.creator.clone(), op.token.clone(), creator_amount, idx),
+            );
+
+            results.push_back(BatchResult { success: true, index: idx });
+            success_count += 1;
+            grand_total = grand_total.saturating_add(op.amount);
+        }
+
+        // Update cumulative batch stats.
+        let stats_key = symbol_short!("bt_stats");
+        let mut stats: BatchStats = env
+            .storage()
+            .instance()
+            .get(&stats_key)
+            .unwrap_or(BatchStats {
+                total_batches: 0,
+                total_tips: 0,
+                total_amount: 0,
+                total_skipped: 0,
+            });
+        stats.total_batches += 1;
+        stats.total_tips += success_count;
+        stats.total_amount = stats.total_amount.saturating_add(grand_total);
+        stats.total_skipped += skipped_count;
+        env.storage().instance().set(&stats_key, &stats);
+
+        env.events().publish(
+            (symbol_short!("btp_multi"),),
+            (tipper, success_count as u32, skipped_count as u32, grand_total),
+        );
+
+        results
+    }
+
+    /// Returns the cumulative batch processing statistics.
+    pub fn get_batch_stats(env: Env) -> BatchStats {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("bt_stats"))
+            .unwrap_or(BatchStats {
+                total_batches: 0,
+                total_tips: 0,
+                total_amount: 0,
+                total_skipped: 0,
+            })
     }
 
     // ── liquidity mining ──────────────────────────────────────────────────────

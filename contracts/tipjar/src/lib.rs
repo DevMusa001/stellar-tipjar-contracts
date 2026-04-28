@@ -85,17 +85,17 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
-// Streaming vesting (#247)
-pub mod streaming_vesting;
+// Tip state channels (off-chain tips with on-chain settlement)
+pub mod state_channel;
 
-// Merkle distributor (#248)
-pub mod merkle_distributor;
+// Meta-transactions for gasless tipping
+pub mod meta_tx;
 
-// Soulbound tokens (#249)
-pub mod soulbound_token;
+// Royalty splits for collaborative content and team tips
+pub mod royalty;
 
-// Dynamic NFTs (#250)
-pub mod dynamic_nft;
+// Zero-knowledge proofs for private tip verification
+pub mod zk_proof;
 
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
@@ -863,14 +863,50 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
-    /// Streaming vesting stream keyed by sub-key.
-    VestingStream(streaming_vesting::VestingStreamKey),
-    /// Merkle distributor keyed by sub-key.
-    MerkleDistributor(merkle_distributor::MerkleKey),
-    /// Soulbound token keyed by sub-key.
-    SoulboundToken(soulbound_token::SbtKey),
-    /// Dynamic NFT keyed by sub-key.
-    DynamicNft(dynamic_nft::DynNftKey),
+    /// Tip state channel record keyed by (tipper, creator, token).
+    TipChannel(Address, Address, Address),
+    /// Individual tip entry within a state channel keyed by (tipper, creator, token, index).
+    TipChannelEntry(Address, Address, Address, u64),
+    /// Per-sender meta-transaction nonce keyed by sender address.
+    MetaTxNonce(Address),
+    /// Trusted relayer flag keyed by relayer address.
+    MetaTxRelayer(Address),
+    /// Consumed request nullifier keyed by request hash (replay protection).
+    MetaTxNullifier(BytesN<32>),
+    /// Meta-transaction execution record keyed by record ID.
+    MetaTxRecord(u64),
+    /// Global meta-transaction record counter.
+    MetaTxCounter,
+    /// Commit-reveal round keyed by round ID.
+    CommitRevealRound(u64),
+    /// Commitment keyed by (round_id, participant).
+    CommitRevealCommitment(u64, Address),
+    /// Reveal keyed by (round_id, participant).
+    CommitRevealReveal(u64, Address),
+    /// List of round IDs created by a creator.
+    CommitRevealCreatorRounds(Address),
+    /// Global commit-reveal round counter.
+    CommitRevealCounter,
+    /// ZK circuit verification key keyed by circuit ID.
+    ZkCircuit(u64),
+    /// ZK proof keyed by proof ID.
+    ZkProof(u64),
+    /// Private tip with ZK proof keyed by tip ID.
+    ZkPrivateTip(u64),
+    /// Nullifier used flag keyed by nullifier hash.
+    ZkNullifier(BytesN<32>),
+    /// List of circuit IDs owned by an address.
+    ZkOwnerCircuits(Address),
+    /// List of proof IDs submitted by a prover.
+    ZkProverProofs(Address),
+    /// List of private tip IDs for a creator.
+    ZkCreatorPrivateTips(Address),
+    /// Global ZK circuit counter.
+    ZkCircuitCounter,
+    /// Global ZK proof counter.
+    ZkProofCounter,
+    /// Global ZK private tip counter.
+    ZkPrivateTipCounter,
 }
 
 #[contracterror]
@@ -1188,7 +1224,125 @@ pub enum ChannelError {
     InvalidDisputeWindow = 208,
 }
 
+/// Errors specific to tip state channels.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum TipChannelError {
+    /// No tip channel exists for the given parties and token.
+    ChannelNotFound = 300,
+    /// Channel is not in the Open state.
+    ChannelNotOpen = 301,
+    /// Provided nonce is not strictly greater than the current nonce.
+    StaleNonce = 302,
+    /// Caller is not a party to this channel.
+    NotChannelParty = 303,
+    /// Deposit amount must be greater than zero.
+    InvalidDeposit = 304,
+    /// Dispute window must be greater than zero.
+    InvalidDisputeWindow = 305,
+    /// Tipped amount exceeds the channel deposit.
+    ExceedsDeposit = 306,
+    /// Tipped amount cannot decrease.
+    TippedAmountDecreased = 307,
+    /// Channel is already settled.
+    AlreadySettled = 308,
+}
 
+/// Errors for meta-transaction (gasless tip) operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum MetaTxError {
+    /// Relayer is not in the trusted relayer set.
+    UntrustedRelayer = 400,
+    /// Signed request has passed its `valid_until` timestamp.
+    RequestExpired = 401,
+    /// Provided nonce does not match the stored per-sender nonce.
+    InvalidNonce = 402,
+    /// This request hash has already been executed (replay attempt).
+    AlreadyExecuted = 403,
+    /// Ed25519 signature verification failed.
+    InvalidSignature = 404,
+    /// Tip amount in the request is invalid (≤ 0).
+    InvalidAmount = 405,
+    /// Token in the request is not whitelisted.
+    TokenNotWhitelisted = 406,
+    /// Relayer is already registered.
+    RelayerAlreadyRegistered = 407,
+    /// Relayer is not registered (cannot remove).
+    RelayerNotFound = 408,
+}
+
+/// Errors for commit-reveal operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum CommitRevealError {
+    /// Round not found.
+    RoundNotFound = 500,
+    /// Round is not in the commit phase.
+    NotInCommitPhase = 501,
+    /// Round is not in the reveal phase.
+    NotInRevealPhase = 502,
+    /// Commit phase has not started yet.
+    CommitPhaseNotStarted = 503,
+    /// Commit phase has ended.
+    CommitPhaseEnded = 504,
+    /// Reveal phase has ended.
+    RevealPhaseEnded = 505,
+    /// Participant has already committed.
+    AlreadyCommitted = 506,
+    /// Participant has already revealed.
+    AlreadyRevealed = 507,
+    /// No commitment found for this participant.
+    NoCommitment = 508,
+    /// Revealed value does not match commitment hash.
+    InvalidReveal = 509,
+    /// Round is already finalized or cancelled.
+    RoundNotActive = 510,
+    /// Commit duration is invalid (too short or too long).
+    InvalidCommitDuration = 511,
+    /// Reveal duration is invalid (too short or too long).
+    InvalidRevealDuration = 512,
+    /// Reveal phase has not ended yet.
+    RevealPhaseNotEnded = 513,
+    /// Commit phase has not ended yet.
+    CommitPhaseNotEnded = 514,
+}
+
+/// Errors for zero-knowledge proof operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ZkProofError {
+    /// Circuit not found.
+    CircuitNotFound = 600,
+    /// Circuit is not active.
+    CircuitNotActive = 601,
+    /// Proof not found.
+    ProofNotFound = 602,
+    /// Proof data exceeds maximum size.
+    ProofTooLarge = 603,
+    /// Too many public inputs.
+    TooManyPublicInputs = 604,
+    /// Nullifier has already been used.
+    NullifierUsed = 605,
+    /// Proof is not in pending status.
+    ProofNotPending = 606,
+    /// Proof has not been verified.
+    ProofNotVerified = 607,
+    /// Nullifier mismatch.
+    NullifierMismatch = 608,
+    /// Private tip not found.
+    PrivateTipNotFound = 609,
+    /// Private tip already claimed.
+    AlreadyClaimed = 610,
+    /// Caller is not the circuit owner.
+    NotCircuitOwner = 611,
+    /// Caller is not the tip creator.
+    NotTipCreator = 612,
+}
 
 #[contract]
 pub struct TipJarContract;
@@ -8800,6 +8954,799 @@ a
             .get(&DataKey::PaymentChannel(party_a, party_b, token))
     }
 
+    // ── tip state channels ───────────────────────────────────────────────────
+
+    /// Opens a tip state channel between `tipper` and `creator`.
+    ///
+    /// Transfers `deposit` from `tipper` into contract escrow.
+    /// Emits `("tch_open",)` with `(tipper, creator, token, deposit)`.
+    pub fn open_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        deposit: i128,
+        dispute_window: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        if deposit <= 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDeposit);
+        }
+        if dispute_window == 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDisputeWindow);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::open(&env, &tipper, &creator, &token, deposit, dispute_window);
+    }
+
+    /// Records an off-chain tip state update. Both parties must authorise.
+    ///
+    /// `new_tipped_amount` is the new cumulative total; `nonce` must be strictly greater.
+    /// Emits `("tch_tip",)` with `(tipper, creator, token, tip_amount, nonce)`.
+    pub fn record_channel_tip(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        new_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+        if nonce <= channel.nonce {
+            panic_with_error!(&env, TipChannelError::StaleNonce);
+        }
+        if new_tipped_amount < channel.tipped_amount {
+            panic_with_error!(&env, TipChannelError::TippedAmountDecreased);
+        }
+        if new_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::record_tip(&env, &tipper, &creator, &token, new_tipped_amount, nonce);
+    }
+
+    /// Cooperatively settles a tip channel. Both parties must authorise.
+    ///
+    /// Distributes `tipped_amount` to creator and remainder to tipper.
+    /// Emits `("tch_setl",)` with `(tipper, creator, token, to_creator, to_tipper)`.
+    pub fn settle_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::settle(&env, &tipper, &creator, &token);
+    }
+
+    /// Initiates or finalises a unilateral dispute close on a tip channel.
+    ///
+    /// First call: sets status to `Disputed`, records claimed state.
+    /// Second call (counterparty, within window): may submit a newer state.
+    /// After window: anyone may finalise.
+    /// Emits `("tch_disp",)` on initiation/update and `("tch_fin",)` on finalisation.
+    pub fn dispute_tip_channel(
+        env: Env,
+        caller: Address,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        claimed_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if caller != channel.tipper && caller != channel.creator {
+            panic_with_error!(&env, TipChannelError::NotChannelParty);
+        }
+        if channel.status == state_channel::TipChannelStatus::Settled {
+            panic_with_error!(&env, TipChannelError::AlreadySettled);
+        }
+        if claimed_tipped_amount < 0 || claimed_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::dispute(
+            &env,
+            &caller,
+            &tipper,
+            &creator,
+            &token,
+            claimed_tipped_amount,
+            nonce,
+        );
+    }
+
+    /// Returns the tip state channel for `(tipper, creator, token)`.
+    pub fn get_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Option<state_channel::TipStateChannel> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TipChannel(tipper, creator, token))
+    }
+
+    /// Returns all recorded tip entries for a tip state channel.
+    pub fn get_tip_channel_tips(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Vec<state_channel::ChannelTip> {
+        state_channel::get_channel_tips(&env, &tipper, &creator, &token)
+    }
+
+    // ── meta-transactions (gasless tipping) ──────────────────────────────────
+
+    /// Registers a trusted relayer for meta-transactions. Admin only.
+    ///
+    /// Emits `("mtx_reg",)` with `(relayer)`.
+    pub fn register_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerAlreadyRegistered);
+        }
+
+        meta_tx::register_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_reg"),),
+            (relayer,),
+        );
+    }
+
+    /// Removes a trusted relayer. Admin only.
+    ///
+    /// Emits `("mtx_rem",)` with `(relayer)`.
+    pub fn remove_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if !meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerNotFound);
+        }
+
+        meta_tx::remove_relayer(&env, &relayer);
+
+        env.events().publish(
+            (symbol_short!("mtx_rem"),),
+            (relayer,),
+        );
+    }
+
+    /// Executes a meta-transaction tip on behalf of a user.
+    ///
+    /// The relayer submits a signed `MetaTipRequest`. The contract verifies:
+    ///   - Relayer is trusted
+    ///   - Request has not expired
+    ///   - Nonce matches the stored per-sender nonce
+    ///   - Signature is valid
+    ///   - Request has not been replayed
+    ///
+    /// On success, executes the tip (or channel open) and increments the sender's nonce.
+    /// Returns the meta-tx record ID.
+    ///
+    /// Emits `("mtx_exec",)` with `(record_id, from, relayer, to, amount, nonce)`.
+    pub fn execute_meta_tip(
+        env: Env,
+        relayer: Address,
+        request: meta_tx::MetaTipRequest,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        relayer.require_auth();
+
+        // Validate amount
+        if request.amount <= 0 {
+            panic_with_error!(&env, MetaTxError::InvalidAmount);
+        }
+
+        // Validate token whitelist
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(request.token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, MetaTxError::TokenNotWhitelisted);
+        }
+
+        // Verify signature and replay protection
+        let hash = meta_tx::verify(&env, &relayer, &request);
+
+        // Execute the action based on request type
+        match request.action {
+            meta_tx::MetaTipAction::Tip => {
+                // Transfer tokens from `from` to contract
+                token::Client::new(&env, &request.token).transfer(
+                    &request.from,
+                    &env.current_contract_address(),
+                    &request.amount,
+                );
+
+                // Credit creator balance
+                let key = DataKey::CreatorBalance(request.to.clone(), request.token.clone());
+                let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&key, &(current + request.amount));
+
+                // Update creator total
+                let total_key = DataKey::CreatorTotal(request.to.clone(), request.token.clone());
+                let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&total_key, &(total + request.amount));
+
+                // Emit tip event
+                env.events().publish(
+                    (symbol_short!("tip"),),
+                    (request.from.clone(), request.to.clone(), request.token.clone(), request.amount),
+                );
+            }
+            meta_tx::MetaTipAction::OpenChannel => {
+                // Open a tip state channel
+                let key = DataKey::TipChannel(
+                    request.from.clone(),
+                    request.to.clone(),
+                    request.token.clone(),
+                );
+                if env.storage().persistent().has(&key) {
+                    panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+                }
+
+                // Default dispute window: 1 hour
+                let dispute_window = 3600u64;
+                state_channel::open(
+                    &env,
+                    &request.from,
+                    &request.to,
+                    &request.token,
+                    request.amount,
+                    dispute_window,
+                );
+            }
+        }
+
+        // Finalize: mark consumed, bump nonce, store record
+        meta_tx::finalize(&env, &relayer, &request, &hash)
+    }
+
+    /// Returns the current meta-transaction nonce for a sender.
+    pub fn get_meta_nonce(env: Env, sender: Address) -> u64 {
+        meta_tx::get_nonce(&env, &sender)
+    }
+
+    /// Returns whether a relayer is trusted for meta-transactions.
+    pub fn is_meta_relayer(env: Env, relayer: Address) -> bool {
+        meta_tx::is_trusted_relayer(&env, &relayer)
+    }
+
+    /// Returns a meta-transaction execution record by ID.
+    pub fn get_meta_record(env: Env, record_id: u64) -> Option<meta_tx::MetaTxRecord> {
+        meta_tx::get_record(&env, record_id)
+    }
+
+    // ── commit-reveal (fair auctions & voting) ───────────────────────────────
+
+    /// Creates a new commit-reveal round.
+    ///
+    /// Returns the round ID.
+    /// Emits `("cr_new",)` with `(round_id, creator, timestamp)`.
+    pub fn create_commit_reveal_round(
+        env: Env,
+        creator: Address,
+        round_type: commit_reveal::RoundType,
+        commit_duration: u64,
+        reveal_duration: u64,
+        description: String,
+        token: Option<Address>,
+        min_bid: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if commit_duration < commit_reveal::MIN_COMMIT_DURATION
+            || commit_duration > commit_reveal::MAX_COMMIT_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidCommitDuration);
+        }
+        if reveal_duration < commit_reveal::MIN_REVEAL_DURATION
+            || reveal_duration > commit_reveal::MAX_REVEAL_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidRevealDuration);
+        }
+
+        commit_reveal::create_round(
+            &env,
+            &creator,
+            round_type,
+            commit_duration,
+            reveal_duration,
+            description,
+            token,
+            min_bid,
+        )
+    }
+
+    /// Submits a commitment during the commit phase.
+    ///
+    /// `commitment_hash` should be SHA256(value || salt).
+    /// Emits `("cr_cmt",)` with `(round_id, participant, commitment_hash)`.
+    pub fn commit_to_round(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        commitment_hash: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_start {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotStarted);
+        }
+        if now >= round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseEnded);
+        }
+
+        let key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, CommitRevealError::AlreadyCommitted);
+        }
+
+        commit_reveal::commit(&env, round_id, &participant, commitment_hash);
+    }
+
+    /// Advances a round from Committing to Revealing status.
+    ///
+    /// Can be called by anyone once the commit phase has ended.
+    /// Emits `("cr_rvl",)` with `(round_id)`.
+    pub fn start_reveal_phase(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotEnded);
+        }
+
+        commit_reveal::start_reveal_phase(&env, round_id);
+    }
+
+    /// Reveals a commitment during the reveal phase.
+    ///
+    /// Verifies that `SHA256(value || salt) == commitment_hash`.
+    /// Emits `("cr_rvld",)` with `(round_id, participant, value)`.
+    pub fn reveal_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        value: i128,
+        salt: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseEnded);
+        }
+
+        let commit_key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        let commitment: Option<commit_reveal::Commitment> =
+            env.storage().persistent().get(&commit_key);
+        if commitment.is_none() {
+            panic_with_error!(&env, CommitRevealError::NoCommitment);
+        }
+        let commitment = commitment.unwrap();
+
+        if commitment.revealed {
+            panic_with_error!(&env, CommitRevealError::AlreadyRevealed);
+        }
+
+        let computed = commit_reveal::compute_commitment(&env, value, &salt);
+        if computed != commitment.commitment_hash {
+            panic_with_error!(&env, CommitRevealError::InvalidReveal);
+        }
+
+        commit_reveal::reveal(&env, round_id, &participant, value, salt);
+    }
+
+    /// Finalizes a round after the reveal phase ends.
+    ///
+    /// For auctions: determines the winner (highest bid).
+    /// Can be called by anyone once the reveal phase has ended.
+    /// Emits `("cr_fin",)` with `(round_id, winner, winning_bid)`.
+    pub fn finalize_commit_reveal_round(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseNotEnded);
+        }
+
+        commit_reveal::finalize_round(&env, round_id);
+    }
+
+    /// Cancels a round. Creator or admin only.
+    ///
+    /// Emits `("cr_cncl",)` with `(round_id)`.
+    pub fn cancel_commit_reveal_round(env: Env, caller: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != round.creator && caller != admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if round.status == commit_reveal::RoundStatus::Finalized
+            || round.status == commit_reveal::RoundStatus::Cancelled
+        {
+            panic_with_error!(&env, CommitRevealError::RoundNotActive);
+        }
+
+        commit_reveal::cancel_round(&env, round_id);
+    }
+
+    /// Returns a commit-reveal round by ID.
+    pub fn get_commit_reveal_round(
+        env: Env,
+        round_id: u64,
+    ) -> Option<commit_reveal::CommitRevealRound> {
+        commit_reveal::get_round(&env, round_id)
+    }
+
+    /// Returns a commitment for a participant in a round.
+    pub fn get_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Commitment> {
+        commit_reveal::get_commitment(&env, round_id, &participant)
+    }
+
+    /// Returns a reveal for a participant in a round.
+    pub fn get_reveal(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Reveal> {
+        commit_reveal::get_reveal(&env, round_id, &participant)
+    }
+
+    /// Returns all round IDs created by a creator.
+    pub fn get_creator_commit_reveal_rounds(env: Env, creator: Address) -> Vec<u64> {
+        commit_reveal::get_creator_rounds(&env, &creator)
+    }
+
+    // ── zero-knowledge proofs (private tip verification) ─────────────────────
+
+    /// Registers a new ZK circuit verification key.
+    ///
+    /// Returns the circuit ID.
+    /// Emits `("zk_reg",)` with `(circuit_id, owner, vk_hash)`.
+    pub fn register_zk_circuit(
+        env: Env,
+        owner: Address,
+        circuit_type: zk_proof::CircuitType,
+        vk_hash: BytesN<32>,
+        description: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        zk_proof::register_circuit(&env, &owner, circuit_type, vk_hash, description)
+    }
+
+    /// Deactivates a ZK circuit. Owner only.
+    ///
+    /// Emits `("zk_deact",)` with `(circuit_id)`.
+    pub fn deactivate_zk_circuit(env: Env, owner: Address, circuit_id: u64) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if circuit.owner != owner {
+            panic_with_error!(&env, ZkProofError::NotCircuitOwner);
+        }
+
+        zk_proof::deactivate_circuit(&env, circuit_id);
+    }
+
+    /// Submits a zero-knowledge proof for verification.
+    ///
+    /// Returns the proof ID.
+    /// Emits `("zk_sub",)` with `(proof_id, prover, circuit_id, nullifier)`.
+    pub fn submit_zk_proof(
+        env: Env,
+        prover: Address,
+        circuit_id: u64,
+        proof_data: Bytes,
+        public_inputs: Vec<BytesN<32>>,
+        private_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+        metadata: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        prover.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if !circuit.active {
+            panic_with_error!(&env, ZkProofError::CircuitNotActive);
+        }
+
+        if proof_data.len() > zk_proof::MAX_PROOF_SIZE {
+            panic_with_error!(&env, ZkProofError::ProofTooLarge);
+        }
+
+        if public_inputs.len() > zk_proof::MAX_PUBLIC_INPUTS {
+            panic_with_error!(&env, ZkProofError::TooManyPublicInputs);
+        }
+
+        let nullifier_key = DataKey::ZkNullifier(nullifier.clone());
+        if env.storage().persistent().get(&nullifier_key).unwrap_or(false) {
+            panic_with_error!(&env, ZkProofError::NullifierUsed);
+        }
+
+        zk_proof::submit_proof(
+            &env,
+            &prover,
+            circuit_id,
+            proof_data,
+            public_inputs,
+            private_commitment,
+            nullifier,
+            metadata,
+        )
+    }
+
+    /// Verifies a submitted ZK proof. Admin only.
+    ///
+    /// In production, this would call a ZK verifier. For this implementation,
+    /// the admin manually marks proofs as valid/invalid.
+    /// Emits `("zk_ver",)` with `(proof_id, is_valid)`.
+    pub fn verify_zk_proof(env: Env, admin: Address, proof_id: u64, is_valid: bool) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Pending {
+            panic_with_error!(&env, ZkProofError::ProofNotPending);
+        }
+
+        zk_proof::verify_proof(&env, proof_id, is_valid);
+    }
+
+    /// Revokes a ZK proof. Admin only.
+    ///
+    /// Emits `("zk_rvk",)` with `(proof_id)`.
+    pub fn revoke_zk_proof(env: Env, admin: Address, proof_id: u64) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+
+        zk_proof::revoke_proof(&env, proof_id);
+    }
+
+    /// Creates a private tip using a ZK proof.
+    ///
+    /// Returns the private tip ID.
+    /// Emits `("zk_ptip",)` with `(tip_id, creator, proof_id)`.
+    pub fn create_zk_private_tip(
+        env: Env,
+        creator: Address,
+        proof_id: u64,
+        amount_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Verified {
+            panic_with_error!(&env, ZkProofError::ProofNotVerified);
+        }
+
+        if proof.nullifier != nullifier {
+            panic_with_error!(&env, ZkProofError::NullifierMismatch);
+        }
+
+        zk_proof::create_private_tip(&env, &creator, proof_id, amount_commitment, nullifier)
+    }
+
+    /// Claims/reveals a private tip. Creator only.
+    ///
+    /// Emits `("zk_clm",)` with `(tip_id, creator)`.
+    pub fn claim_zk_private_tip(env: Env, creator: Address, tip_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let tip = zk_proof::get_private_tip(&env, tip_id);
+        if tip.is_none() {
+            panic_with_error!(&env, ZkProofError::PrivateTipNotFound);
+        }
+        let tip = tip.unwrap();
+
+        if tip.creator != creator {
+            panic_with_error!(&env, ZkProofError::NotTipCreator);
+        }
+
+        if tip.claimed {
+            panic_with_error!(&env, ZkProofError::AlreadyClaimed);
+        }
+
+        zk_proof::claim_private_tip(&env, tip_id);
+    }
+
+    /// Returns a ZK circuit by ID.
+    pub fn get_zk_circuit(env: Env, circuit_id: u64) -> Option<zk_proof::VerificationKey> {
+        zk_proof::get_circuit(&env, circuit_id)
+    }
+
+    /// Returns a ZK proof by ID.
+    pub fn get_zk_proof(env: Env, proof_id: u64) -> Option<zk_proof::ZkProof> {
+        zk_proof::get_proof(&env, proof_id)
+    }
+
+    /// Returns a private tip by ID.
+    pub fn get_zk_private_tip(env: Env, tip_id: u64) -> Option<zk_proof::PrivateTipProof> {
+        zk_proof::get_private_tip(&env, tip_id)
+    }
+
+    /// Returns all circuit IDs owned by an address.
+    pub fn get_owner_zk_circuits(env: Env, owner: Address) -> Vec<u64> {
+        zk_proof::get_owner_circuits(&env, &owner)
+    }
+
+    /// Returns all proof IDs submitted by a prover.
+    pub fn get_prover_zk_proofs(env: Env, prover: Address) -> Vec<u64> {
+        zk_proof::get_prover_proofs(&env, &prover)
+    }
+
+    /// Returns all private tip IDs for a creator.
+    pub fn get_creator_zk_private_tips(env: Env, creator: Address) -> Vec<u64> {
+        zk_proof::get_creator_private_tips(&env, &creator)
+    }
+
     // ── optimistic rollup ────────────────────────────────────────────────────
 
     /// Initialize the rollup with a designated sequencer.
@@ -8884,223 +9831,110 @@ a
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
     }
 
-    // ── Streaming Vesting (#247) ──────────────────────────────────────────────
+    // ── fractional ownership ─────────────────────────────────────────────────
 
-    /// Create a streaming vesting position.
-    ///
-    /// Tokens unlock linearly per second over `duration_seconds`.
-    /// Transfers `total_amount` of `token` from `sender` into escrow.
-    /// Returns the stream ID.
-    pub fn sv_create(
-        env: Env,
-        sender: Address,
-        recipient: Address,
-        token: Address,
-        total_amount: i128,
-        duration_seconds: u64,
-    ) -> u64 {
-        Self::require_not_paused(&env);
-        sender.require_auth();
-        let whitelisted: bool = env.storage().instance()
-            .get(&DataKey::TokenWhitelist(token.clone())).unwrap_or(false);
-        if !whitelisted { panic_with_error!(&env, TipJarError::TokenNotWhitelisted); }
-        streaming_vesting::create(&env, &sender, &recipient, &token, total_amount, duration_seconds)
-    }
-
-    /// Withdraw all currently vested tokens for a streaming vesting stream.
-    ///
-    /// Returns the amount withdrawn.
-    pub fn sv_withdraw(env: Env, recipient: Address, stream_id: u64) -> i128 {
-        Self::require_not_paused(&env);
-        recipient.require_auth();
-        streaming_vesting::withdraw(&env, &recipient, stream_id)
-    }
-
-    /// Cancel a streaming vesting stream. Only the original sender may cancel.
-    ///
-    /// Vested-but-unwithdrawn tokens go to the recipient; unvested tokens are refunded to sender.
-    pub fn sv_cancel(env: Env, sender: Address, stream_id: u64) {
-        Self::require_not_paused(&env);
-        sender.require_auth();
-        streaming_vesting::cancel(&env, &sender, stream_id)
-    }
-
-    /// Returns the amount currently available to withdraw for a stream.
-    pub fn sv_available(env: Env, stream_id: u64) -> i128 {
-        streaming_vesting::available_to_withdraw(&env, stream_id)
-    }
-
-    /// Returns the streaming vesting stream record.
-    pub fn sv_get_stream(env: Env, stream_id: u64) -> streaming_vesting::VestingStream {
-        streaming_vesting::get_stream(&env, stream_id)
-    }
-
-    /// Returns all stream IDs for a recipient.
-    pub fn sv_get_recipient_streams(env: Env, recipient: Address) -> Vec<u64> {
-        streaming_vesting::get_recipient_streams(&env, &recipient)
-    }
-
-    /// Returns all stream IDs for a sender.
-    pub fn sv_get_sender_streams(env: Env, sender: Address) -> Vec<u64> {
-        streaming_vesting::get_sender_streams(&env, &sender)
-    }
-
-    // ── Merkle Distributor (#248) ─────────────────────────────────────────────
-
-    /// Create a Merkle distribution campaign.
-    ///
-    /// Transfers `total_amount` of `token` from `creator` into escrow.
-    /// Returns the distribution ID.
-    pub fn md_create(
+    /// Mint `total_supply` fractions for `creator`.
+    pub fn mint_fractions(
         env: Env,
         creator: Address,
-        token: Address,
-        root: BytesN<32>,
-        total_amount: i128,
-    ) -> u64 {
-        Self::require_not_paused(&env);
-        creator.require_auth();
-        let whitelisted: bool = env.storage().instance()
-            .get(&DataKey::TokenWhitelist(token.clone())).unwrap_or(false);
-        if !whitelisted { panic_with_error!(&env, TipJarError::TokenNotWhitelisted); }
-        merkle_distributor::create_distribution(&env, &creator, &token, root, total_amount)
-    }
-
-    /// Claim an allocation from a Merkle distribution.
-    ///
-    /// `proof` is an ordered list of sibling hashes from leaf to root.
-    pub fn md_claim(
-        env: Env,
-        distribution_id: u64,
-        recipient: Address,
-        amount: i128,
-        proof: Vec<BytesN<32>>,
+        total_supply: u64,
+        buyout_price_per_fraction: i128,
     ) {
-        Self::require_not_paused(&env);
-        recipient.require_auth();
-        merkle_distributor::claim(&env, distribution_id, &recipient, amount, proof)
+        fractional_ownership::mint_fractions(&env, &creator, total_supply, buyout_price_per_fraction);
     }
 
-    /// Deactivate a Merkle distribution. Admin only.
-    pub fn md_deactivate(env: Env, admin: Address, distribution_id: u64) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic_with_error!(&env, TipJarError::Unauthorized); }
-        merkle_distributor::deactivate(&env, distribution_id)
+    /// Record `amount` of revenue for `creator`'s fraction pool.
+    pub fn accrue_revenue(env: Env, creator: Address, amount: i128) {
+        fractional_ownership::accrue_revenue(&env, &creator, amount);
     }
 
-    /// Returns whether `recipient` has already claimed from `distribution_id`.
-    pub fn md_is_claimed(env: Env, distribution_id: u64, recipient: Address) -> bool {
-        merkle_distributor::is_claimed(&env, distribution_id, &recipient)
+    /// Claim accumulated revenue for `holder` in `creator`'s pool.
+    pub fn claim_fraction_revenue(env: Env, creator: Address, holder: Address) -> i128 {
+        fractional_ownership::claim_revenue(&env, &creator, &holder)
     }
 
-    /// Returns the Merkle distribution record.
-    pub fn md_get_distribution(env: Env, distribution_id: u64) -> merkle_distributor::MerkleDistribution {
-        merkle_distributor::get_distribution(&env, distribution_id)
-    }
-
-    // ── Soulbound Tokens (#249) ───────────────────────────────────────────────
-
-    /// Mint a soulbound token to `owner`. Admin only.
-    ///
-    /// Returns the token ID.
-    pub fn sbt_mint(
+    /// Transfer `amount` fractions from `from` to `to`.
+    pub fn transfer_fractions(
         env: Env,
-        admin: Address,
-        owner: Address,
-        achievement: String,
-        metadata: String,
-    ) -> u64 {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic_with_error!(&env, TipJarError::Unauthorized); }
-        soulbound_token::mint(&env, &owner, achievement, metadata)
-    }
-
-    /// Revoke a soulbound token. Admin only.
-    pub fn sbt_revoke(env: Env, admin: Address, token_id: u64) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic_with_error!(&env, TipJarError::Unauthorized); }
-        soulbound_token::revoke(&env, token_id)
-    }
-
-    /// Returns the soulbound token record.
-    pub fn sbt_get(env: Env, token_id: u64) -> soulbound_token::SoulboundToken {
-        soulbound_token::get_token(&env, token_id)
-    }
-
-    /// Returns all SBT IDs owned by `owner`.
-    pub fn sbt_get_owner_tokens(env: Env, owner: Address) -> Vec<u64> {
-        soulbound_token::get_owner_tokens(&env, &owner)
-    }
-
-    /// Returns `true` if `owner` holds a non-revoked SBT for `achievement`.
-    pub fn sbt_has_achievement(env: Env, owner: Address, achievement: String) -> bool {
-        soulbound_token::has_achievement(&env, &owner, &achievement)
-    }
-
-    // ── Dynamic NFTs (#250) ───────────────────────────────────────────────────
-
-    /// Mint a dynamic NFT. Admin only.
-    ///
-    /// Returns the NFT ID.
-    pub fn dnft_mint(
-        env: Env,
-        admin: Address,
-        owner: Address,
-        metadata_uri: String,
-        initial_traits: Map<String, String>,
-    ) -> u64 {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic_with_error!(&env, TipJarError::Unauthorized); }
-        dynamic_nft::mint(&env, &owner, metadata_uri, initial_traits)
-    }
-
-    /// Record a tip contribution to a dynamic NFT, potentially triggering evolution.
-    ///
-    /// Anyone may call this to associate a tip with an NFT.
-    pub fn dnft_record_tip(env: Env, nft_id: u64, tip_amount: i128) {
-        if tip_amount <= 0 { panic_with_error!(&env, TipJarError::InvalidAmount); }
-        dynamic_nft::record_tip(&env, nft_id, tip_amount)
-    }
-
-    /// Update a trait on a dynamic NFT. Only the NFT owner may call.
-    pub fn dnft_update_trait(
-        env: Env,
-        owner: Address,
-        nft_id: u64,
-        key: String,
-        value: String,
+        creator: Address,
+        from: Address,
+        to: Address,
+        amount: u64,
     ) {
-        owner.require_auth();
-        let nft = dynamic_nft::get_nft(&env, nft_id);
-        if nft.owner != owner { panic_with_error!(&env, TipJarError::Unauthorized); }
-        dynamic_nft::update_trait(&env, nft_id, key, value)
+        fractional_ownership::transfer_fractions(&env, &creator, &from, &to, amount);
     }
 
-    /// Update the metadata URI of a dynamic NFT. Only the NFT owner may call.
-    pub fn dnft_update_metadata(env: Env, owner: Address, nft_id: u64, metadata_uri: String) {
-        owner.require_auth();
-        let nft = dynamic_nft::get_nft(&env, nft_id);
-        if nft.owner != owner { panic_with_error!(&env, TipJarError::Unauthorized); }
-        dynamic_nft::update_metadata(&env, nft_id, metadata_uri)
+    /// Buy out all fractions not held by `buyer`. Returns total cost.
+    pub fn buyout_fractions(env: Env, creator: Address, buyer: Address) -> i128 {
+        fractional_ownership::buyout(&env, &creator, &buyer)
     }
 
-    /// Returns the dynamic NFT record.
-    pub fn dnft_get(env: Env, nft_id: u64) -> dynamic_nft::DynamicNft {
-        dynamic_nft::get_nft(&env, nft_id)
+    /// Returns the fraction pool for `creator`.
+    pub fn get_fraction_pool(
+        env: Env,
+        creator: Address,
+    ) -> Option<fractional_ownership::FractionPool> {
+        fractional_ownership::get_pool(&env, &creator)
     }
 
-    /// Returns all NFT IDs owned by `owner`.
-    pub fn dnft_get_owner_nfts(env: Env, owner: Address) -> Vec<u64> {
-        dynamic_nft::get_owner_nfts(&env, &owner)
+    /// Returns the fraction position for `holder` in `creator`'s pool.
+    pub fn get_fraction_position(
+        env: Env,
+        creator: Address,
+        holder: Address,
+    ) -> fractional_ownership::FractionPosition {
+        fractional_ownership::get_position(&env, &creator, &holder)
     }
 
-    /// Returns the evolution history for a dynamic NFT.
-    pub fn dnft_get_history(env: Env, nft_id: u64) -> Vec<dynamic_nft::EvolutionEvent> {
-        dynamic_nft::get_evolution_history(&env, nft_id)
+    // ── royalty splits ───────────────────────────────────────────────────────
+
+    /// Create or replace a split configuration for `split_id`.
+    pub fn set_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::set_split(&env, &split_id, &owner, recipients);
+    }
+
+    /// Modify an existing split configuration (owner only).
+    pub fn modify_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::modify_split(&env, &split_id, &owner, recipients);
+    }
+
+    /// Distribute `amount` according to the split config for `split_id`.
+    pub fn distribute_split(env: Env, split_id: Address, amount: i128) -> i128 {
+        royalty::distribute(&env, &split_id, amount)
+    }
+
+    /// Returns the split config for `split_id`.
+    pub fn get_split(env: Env, split_id: Address) -> Option<royalty::SplitConfig> {
+        royalty::get_split(&env, &split_id)
+    }
+
+    /// Returns a split history entry by index.
+    pub fn get_split_history_entry(
+        env: Env,
+        split_id: Address,
+        index: u64,
+    ) -> Option<royalty::SplitHistoryEntry> {
+        royalty::get_history_entry(&env, &split_id, index)
+    }
+
+    /// Returns the total number of distribution history entries for `split_id`.
+    pub fn get_split_history_count(env: Env, split_id: Address) -> u64 {
+        royalty::get_history_count(&env, &split_id)
+    }
+
+    /// Returns the accumulated split balance for `recipient`.
+    pub fn get_split_balance(env: Env, recipient: Address) -> i128 {
+        royalty::get_balance(&env, &recipient)
     }
 }
 

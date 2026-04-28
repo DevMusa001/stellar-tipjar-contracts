@@ -90,3 +90,11 @@ path = "tests/payment_channel_tests.rs"
 name = "rollup_tests"
 path = "tests/rollup_tests.rs"
 
+
+[[test]]
+name = "fractional_ownership_tests"
+path = "tests/fractional_ownership_tests.rs"
+
+[[test]]
+name = "royalty_split_tests"
+path = "tests/royalty_split_tests.rs"

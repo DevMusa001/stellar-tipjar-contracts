@@ -99,6 +99,18 @@ pub mod royalty;
 // Zero-knowledge proofs for private tip verification
 pub mod zk_proof;
 
+// Cross-contract call routing and batch execution
+pub mod cross_contract;
+
+// Tip sharding for parallel processing
+pub mod sharding;
+
+// Tip validity proofs for lightweight verification
+pub mod validity_proof;
+
+// Verkle tree for efficient tip state proofs
+pub mod verkle_tree;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -917,6 +929,14 @@ pub enum DataKey {
     ZkProofCounter,
     /// Global ZK private tip counter.
     ZkPrivateTipCounter,
+    /// Cross-contract call sub-keys.
+    CrossCall(cross_contract::CrossCallKey),
+    /// Sharding sub-keys.
+    Shard(sharding::ShardKey),
+    /// Validity proof sub-keys.
+    ValidityProof(validity_proof::ValidityProofKey),
+    /// Verkle tree sub-keys.
+    Verkle(verkle_tree::VerkleKey),
 }
 
 #[contracterror]
@@ -10383,6 +10403,249 @@ impl TipJarContract {
     pub fn get_split_balance(env: Env, recipient: Address) -> i128 {
         royalty::get_balance(&env, &recipient)
     }
+
+    // ── Cross-Contract Calls (#215) ──────────────────────────────────────────
+
+    /// Route a single cross-contract call.
+    ///
+    /// Returns the call ID.
+    pub fn cc_route_call(
+        env: Env,
+        caller: Address,
+        target: Address,
+        call_type: cross_contract::CallType,
+        args: soroban_sdk::Bytes,
+    ) -> u64 {
+        cross_contract::route_call(&env, &caller, &target, call_type, args)
+    }
+
+    /// Execute a batch of cross-contract calls.
+    ///
+    /// Returns the batch ID.
+    pub fn cc_route_batch(
+        env: Env,
+        caller: Address,
+        targets: Vec<Address>,
+        call_types: Vec<cross_contract::CallType>,
+        args_list: Vec<soroban_sdk::Bytes>,
+    ) -> u64 {
+        cross_contract::route_batch(&env, &caller, targets, call_types, args_list)
+    }
+
+    /// Get a cross-contract call record by ID.
+    pub fn cc_get_call(env: Env, call_id: u64) -> Option<cross_contract::CrossCall> {
+        cross_contract::get_call(&env, call_id)
+    }
+
+    /// Get a batch record by ID.
+    pub fn cc_get_batch(env: Env, batch_id: u64) -> Option<cross_contract::CallBatch> {
+        cross_contract::get_batch(&env, batch_id)
+    }
+
+    /// Get all call IDs initiated by a caller.
+    pub fn cc_get_caller_calls(env: Env, caller: Address) -> Vec<u64> {
+        cross_contract::get_caller_calls(&env, &caller)
+    }
+
+    // ── Tip Sharding (#269) ──────────────────────────────────────────────────
+
+    /// Initialize the sharding system.
+    pub fn shard_init(env: Env, admin: Address, shard_count: u32, auto_rebalance: bool) {
+        sharding::init_sharding(&env, &admin, shard_count, auto_rebalance)
+    }
+
+    /// Record a tip being processed by its assigned shard.
+    ///
+    /// Returns the shard ID.
+    pub fn shard_record_tip(env: Env, sender: Address, amount: i128, tip_id: u64) -> u32 {
+        sharding::record_tip_in_shard(&env, &sender, amount, tip_id)
+    }
+
+    /// Initiate a cross-shard transfer.
+    ///
+    /// Returns the transfer ID.
+    pub fn shard_cross_transfer(
+        env: Env,
+        from_shard: u32,
+        to_shard: u32,
+        tip_id: u64,
+        amount: i128,
+        token: Address,
+    ) -> u64 {
+        sharding::cross_shard_transfer(&env, from_shard, to_shard, tip_id, amount, &token)
+    }
+
+    /// Finalize a cross-shard transfer.
+    pub fn shard_finalize_transfer(env: Env, transfer_id: u64) {
+        sharding::finalize_transfer(&env, transfer_id)
+    }
+
+    /// Trigger a manual rebalance of shards.
+    pub fn shard_rebalance(env: Env, admin: Address) {
+        sharding::rebalance(&env, &admin)
+    }
+
+    /// Get the state of a specific shard.
+    pub fn shard_get_state(env: Env, shard_id: u32) -> sharding::ShardState {
+        sharding::get_shard(&env, shard_id)
+    }
+
+    /// Get the sharding configuration.
+    pub fn shard_get_config(env: Env) -> sharding::ShardConfig {
+        sharding::get_config_pub(&env)
+    }
+
+    /// Get the shard assignment for an address.
+    pub fn shard_get_assignment(env: Env, addr: Address) -> u32 {
+        sharding::get_assignment(&env, &addr)
+    }
+
+    /// Get a cross-shard transfer record.
+    pub fn shard_get_transfer(env: Env, transfer_id: u64) -> Option<sharding::ShardTransfer> {
+        sharding::get_transfer(&env, transfer_id)
+    }
+
+    // ── Tip Validity Proofs (#270) ───────────────────────────────────────────
+
+    /// Generate a validity proof for a tip.
+    ///
+    /// Returns the proof ID.
+    pub fn vp_generate(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        tip_id: u64,
+        witness: soroban_sdk::Bytes,
+    ) -> u64 {
+        validity_proof::generate_proof(&env, &sender, &creator, &token, amount, tip_id, witness)
+    }
+
+    /// Verify a validity proof.
+    ///
+    /// Returns true if valid.
+    pub fn vp_verify(env: Env, proof_id: u64) -> bool {
+        validity_proof::verify_proof(&env, proof_id)
+    }
+
+    /// Batch-verify multiple proofs.
+    ///
+    /// Returns the count of valid proofs.
+    pub fn vp_batch_verify(env: Env, proof_ids: Vec<u64>) -> u32 {
+        validity_proof::batch_verify(&env, proof_ids)
+    }
+
+    /// Aggregate multiple proofs into a single aggregate proof.
+    ///
+    /// Returns the aggregate ID.
+    pub fn vp_aggregate(env: Env, proof_ids: Vec<u64>) -> u64 {
+        validity_proof::aggregate_proofs(&env, proof_ids)
+    }
+
+    /// Revoke a proof.
+    pub fn vp_revoke(env: Env, admin: Address, proof_id: u64) {
+        validity_proof::revoke_proof(&env, &admin, proof_id)
+    }
+
+    /// Get a validity proof by ID.
+    pub fn vp_get_proof(env: Env, proof_id: u64) -> Option<validity_proof::TipProof> {
+        validity_proof::get_proof(&env, proof_id)
+    }
+
+    /// Get the proof ID for a given tip ID.
+    pub fn vp_get_proof_for_tip(env: Env, tip_id: u64) -> Option<u64> {
+        validity_proof::get_proof_for_tip(&env, tip_id)
+    }
+
+    /// Get an aggregated proof by ID.
+    pub fn vp_get_aggregate(env: Env, agg_id: u64) -> Option<validity_proof::AggregatedProof> {
+        validity_proof::get_aggregate(&env, agg_id)
+    }
+
+    // ── Tip Verkle Trees (#273) ──────────────────────────────────────────────
+
+    /// Create a new Verkle tree.
+    ///
+    /// Returns the tree ID.
+    pub fn vk_create_tree(env: Env, owner: Address) -> u64 {
+        verkle_tree::create_tree(&env, &owner)
+    }
+
+    /// Insert or update a leaf in a Verkle tree.
+    ///
+    /// Returns the new root commitment.
+    pub fn vk_update_leaf(
+        env: Env,
+        tree_id: u64,
+        creator: Address,
+        token: Address,
+        value: soroban_sdk::Bytes,
+    ) -> BytesN<32> {
+        verkle_tree::update_leaf(&env, tree_id, &creator, &token, value)
+    }
+
+    /// Generate a Verkle proof for a leaf.
+    ///
+    /// Returns the proof ID.
+    pub fn vk_generate_proof(env: Env, tree_id: u64, leaf_index: u32) -> u64 {
+        verkle_tree::generate_proof(&env, tree_id, leaf_index)
+    }
+
+    /// Verify a Verkle proof against the current tree root.
+    ///
+    /// Returns true if valid.
+    pub fn vk_verify_proof(env: Env, proof_id: u64) -> bool {
+        verkle_tree::verify_proof(&env, proof_id)
+    }
+
+    /// Get a Verkle tree by ID.
+    pub fn vk_get_tree(env: Env, tree_id: u64) -> Option<verkle_tree::VerkleTree> {
+        verkle_tree::get_tree(&env, tree_id)
+    }
+
+    /// Get a Verkle leaf by tree ID and index.
+    pub fn vk_get_leaf(env: Env, tree_id: u64, index: u32) -> Option<verkle_tree::VerkleLeaf> {
+        verkle_tree::get_leaf(&env, tree_id, index)
+    }
+
+    /// Get a Verkle proof by ID.
+    pub fn vk_get_proof(env: Env, proof_id: u64) -> Option<verkle_tree::VerkleProof> {
+        verkle_tree::get_proof(&env, proof_id)
+    }
+
+    /// Get all tree IDs owned by an address.
+    pub fn vk_get_owner_trees(env: Env, owner: Address) -> Vec<u64> {
+        verkle_tree::get_owner_trees(&env, &owner)
+    }
+
+    /// Deactivate a Verkle tree.
+    pub fn vk_deactivate_tree(env: Env, owner: Address, tree_id: u64) {
+        verkle_tree::deactivate_tree(&env, &owner, tree_id)
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // ── Time-Lock Puzzles ────────────────────────────────────────────────────
 

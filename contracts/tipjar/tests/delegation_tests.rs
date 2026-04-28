@@ -2,10 +2,19 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
 use tipjar::{DataKey, Delegation, TipJarContract, TipJarContractClient, TipJarError};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -42,7 +51,10 @@ fn test_delegate_withdrawal_and_limit_tracking() {
     client.withdraw_as_delegate(&delegate, &creator, &token, &200i128);
 
     assert_eq!(client.get_withdrawable_balance(&creator, &token), 300i128);
-    assert_eq!(soroban_sdk::token::StellarAssetClient::new(&env, &token).balance(&delegate), 200i128);
+    assert_eq!(
+        soroban_sdk::token::StellarAssetClient::new(&env, &token).balance(&delegate),
+        200i128
+    );
 
     let delegation = client.get_delegation(&creator, &delegate).unwrap();
     assert_eq!(delegation.used_amount, 200i128);

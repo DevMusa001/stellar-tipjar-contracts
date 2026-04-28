@@ -6,18 +6,23 @@ use soroban_sdk::{
 };
 
 mod tipjar {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32-unknown-unknown/release/tipjar.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32-unknown-unknown/release/tipjar.wasm");
 }
 
-use tipjar::{OptionType, OptionStatus, Client as TipJarClient};
+use tipjar::{Client as TipJarClient, OptionStatus, OptionType};
 
 fn create_token_contract<'a>(env: &Env, admin: &Address) -> token::StellarAssetClient<'a> {
     token::StellarAssetClient::new(env, &env.register_stellar_asset_contract(admin.clone()))
 }
 
-fn setup_test_env() -> (Env, TipJarClient, Address, Address, Address, token::StellarAssetClient) {
+fn setup_test_env() -> (
+    Env,
+    TipJarClient,
+    Address,
+    Address,
+    Address,
+    token::StellarAssetClient,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -101,7 +106,7 @@ fn test_write_put_option() {
 
     let option = client.get_option(&option_id).unwrap();
     assert_eq!(option.option_type, OptionType::Put);
-    
+
     // Put collateral should be strike_price * amount / 1_000_000
     let expected_collateral = (strike_price * amount) / 1_000_000;
     assert_eq!(option.collateral, expected_collateral);

@@ -10,7 +10,14 @@ use tipjar::{TipJarContract, TipJarContractClient, TipJarError};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -25,10 +32,16 @@ fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address, Ad
     client.add_token(&admin, &token_id);
 
     let sender = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token_id)
-        .mint(&sender, &1_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&sender, &1_000_000i128);
 
-    (env, client, admin, sender, Address::generate(&env), token_id)
+    (
+        env,
+        client,
+        admin,
+        sender,
+        Address::generate(&env),
+        token_id,
+    )
 }
 
 // ── get_withdrawal_limits ─────────────────────────────────────────────────────

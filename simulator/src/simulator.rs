@@ -51,7 +51,14 @@ impl Simulator {
             eprintln!("[sim] contract={contract:?}  token={token:?}  admin={admin:?}");
         }
 
-        Self { env, contract, token, token_admin, admin, verbose }
+        Self {
+            env,
+            contract,
+            token,
+            token_admin,
+            admin,
+            verbose,
+        }
     }
 
     fn client(&self) -> TipJarContractClient {
@@ -87,7 +94,11 @@ impl Simulator {
         if self.verbose {
             eprintln!("[sim] tip {amount} → creator={creator:?}  ok={ok}  cpu={cpu}");
         }
-        SimResult { ok, error, cpu_instructions: cpu }
+        SimResult {
+            ok,
+            error,
+            cpu_instructions: cpu,
+        }
     }
 
     /// Simulate a withdrawal and return a `SimResult`.
@@ -100,7 +111,11 @@ impl Simulator {
         if self.verbose {
             eprintln!("[sim] withdraw creator={creator:?}  ok={ok}  cpu={cpu}");
         }
-        SimResult { ok, error, cpu_instructions: cpu }
+        SimResult {
+            ok,
+            error,
+            cpu_instructions: cpu,
+        }
     }
 
     /// Query the withdrawable balance for a creator.

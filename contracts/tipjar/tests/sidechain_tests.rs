@@ -28,7 +28,12 @@ impl Ctx {
         client.init(&admin);
         client.init_sidechain(&admin, &operator);
 
-        Self { env, client, admin, operator }
+        Self {
+            env,
+            client,
+            admin,
+            operator,
+        }
     }
 
     fn state_root(&self, seed: u8) -> BytesN<32> {
@@ -73,10 +78,14 @@ fn test_init_sidechain_unauthorized() {
 fn test_submit_checkpoint_increments_seq() {
     let ctx = Ctx::new();
 
-    let seq1 = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
+    let seq1 = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
     assert_eq!(seq1, 1);
 
-    let seq2 = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(2), &5, &500);
+    let seq2 = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(2), &5, &500);
     assert_eq!(seq2, 2);
 
     let state = ctx.client.get_sidechain_state();
@@ -88,7 +97,9 @@ fn test_submit_checkpoint_stores_data() {
     let ctx = Ctx::new();
     let root = ctx.state_root(42);
 
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &root, &20, &2000);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &root, &20, &2000);
 
     let cp = ctx.client.get_checkpoint(&seq).unwrap();
     assert_eq!(cp.seq, seq);
@@ -103,7 +114,9 @@ fn test_submit_checkpoint_unauthorized() {
     let ctx = Ctx::new();
     let impostor = Address::generate(&ctx.env);
 
-    let result = ctx.client.try_submit_checkpoint(&impostor, &ctx.state_root(1), &10, &1000);
+    let result = ctx
+        .client
+        .try_submit_checkpoint(&impostor, &ctx.state_root(1), &10, &1000);
     assert!(result.is_err());
 }
 
@@ -112,7 +125,9 @@ fn test_submit_checkpoint_unauthorized() {
 #[test]
 fn test_finalize_checkpoint() {
     let ctx = Ctx::new();
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
 
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
@@ -123,7 +138,9 @@ fn test_finalize_checkpoint() {
 #[test]
 fn test_finalize_checkpoint_updates_state() {
     let ctx = Ctx::new();
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
     let state = ctx.client.get_sidechain_state();
@@ -139,17 +156,14 @@ fn test_record_and_settle_batch() {
     let creator = Address::generate(&ctx.env);
     let token = ctx.token();
 
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
-    let batch_id = ctx.client.record_tip_batch(
-        &ctx.operator,
-        &creator,
-        &token,
-        &500,
-        &5,
-        &seq,
-    );
+    let batch_id = ctx
+        .client
+        .record_tip_batch(&ctx.operator, &creator, &token, &500, &5, &seq);
     assert_eq!(batch_id, 1);
 
     ctx.client.finalize_tips(&batch_id);
@@ -164,17 +178,14 @@ fn test_settle_batch_credits_creator_balance() {
     let creator = Address::generate(&ctx.env);
     let token = ctx.token();
 
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &3, &300);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &3, &300);
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
-    let batch_id = ctx.client.record_tip_batch(
-        &ctx.operator,
-        &creator,
-        &token,
-        &300,
-        &3,
-        &seq,
-    );
+    let batch_id = ctx
+        .client
+        .record_tip_batch(&ctx.operator, &creator, &token, &300, &3, &seq);
     ctx.client.finalize_tips(&batch_id);
 
     // Creator balance should be credited
@@ -189,16 +200,13 @@ fn test_settle_batch_requires_finalized_checkpoint() {
     let token = ctx.token();
 
     // Submit but do NOT finalize the checkpoint
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
 
-    let batch_id = ctx.client.record_tip_batch(
-        &ctx.operator,
-        &creator,
-        &token,
-        &500,
-        &5,
-        &seq,
-    );
+    let batch_id = ctx
+        .client
+        .record_tip_batch(&ctx.operator, &creator, &token, &500, &5, &seq);
 
     // Should panic because checkpoint is not finalized
     let result = ctx.client.try_finalize_tips(&batch_id);
@@ -211,17 +219,14 @@ fn test_record_batch_invalid_amount() {
     let creator = Address::generate(&ctx.env);
     let token = ctx.token();
 
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &0, &0);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &0, &0);
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
-    let result = ctx.client.try_record_tip_batch(
-        &ctx.operator,
-        &creator,
-        &token,
-        &0,
-        &0,
-        &seq,
-    );
+    let result = ctx
+        .client
+        .try_record_tip_batch(&ctx.operator, &creator, &token, &0, &0, &seq);
     assert!(result.is_err());
 }
 
@@ -233,11 +238,17 @@ fn test_multiple_batches_accumulate() {
     let creator = Address::generate(&ctx.env);
     let token = ctx.token();
 
-    let seq = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
+    let seq = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &10, &1000);
     ctx.client.finalize_checkpoint(&ctx.operator, &seq);
 
-    let b1 = ctx.client.record_tip_batch(&ctx.operator, &creator, &token, &400, &4, &seq);
-    let b2 = ctx.client.record_tip_batch(&ctx.operator, &creator, &token, &600, &6, &seq);
+    let b1 = ctx
+        .client
+        .record_tip_batch(&ctx.operator, &creator, &token, &400, &4, &seq);
+    let b2 = ctx
+        .client
+        .record_tip_batch(&ctx.operator, &creator, &token, &600, &6, &seq);
 
     ctx.client.finalize_tips(&b1);
     ctx.client.finalize_tips(&b2);
@@ -250,10 +261,14 @@ fn test_multiple_batches_accumulate() {
 fn test_multiple_checkpoints_state() {
     let ctx = Ctx::new();
 
-    let s1 = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
+    let s1 = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(1), &5, &500);
     ctx.client.finalize_checkpoint(&ctx.operator, &s1);
 
-    let s2 = ctx.client.submit_checkpoint(&ctx.operator, &ctx.state_root(2), &10, &1000);
+    let s2 = ctx
+        .client
+        .submit_checkpoint(&ctx.operator, &ctx.state_root(2), &10, &1000);
     ctx.client.finalize_checkpoint(&ctx.operator, &s2);
 
     let state = ctx.client.get_sidechain_state();

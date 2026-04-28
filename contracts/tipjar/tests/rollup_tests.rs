@@ -25,7 +25,12 @@ impl Ctx {
         let client = TipJarContractClient::new(&env, &contract_id);
         client.init(&admin);
         client.init_rollup(&admin, &sequencer);
-        Self { env, client, admin, sequencer }
+        Self {
+            env,
+            client,
+            admin,
+            sequencer,
+        }
     }
 
     fn root(&self, seed: u8) -> BytesN<32> {
@@ -34,7 +39,9 @@ impl Ctx {
 
     fn advance_past_challenge(&self) {
         let challenge_period = 7 * 24 * 3600u64;
-        self.env.ledger().with_mut(|l| l.timestamp += challenge_period + 1);
+        self.env
+            .ledger()
+            .with_mut(|l| l.timestamp += challenge_period + 1);
     }
 }
 
@@ -72,8 +79,12 @@ fn test_submit_batch_increments_id() {
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
 
-    let id1 = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
-    let id2 = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(2), &creator, &token, &500, &5);
+    let id1 =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    let id2 =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(2), &creator, &token, &500, &5);
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
 
@@ -88,7 +99,9 @@ fn test_submit_batch_stores_pending() {
     let token = Address::generate(&ctx.env);
     let root = ctx.root(42);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &root, &creator, &token, &800, &8);
+    let id = ctx
+        .client
+        .submit_rollup_batch(&ctx.sequencer, &root, &creator, &token, &800, &8);
     let batch = ctx.client.get_rollup_batch(&id).unwrap();
 
     assert_eq!(batch.batch_id, id);
@@ -104,7 +117,10 @@ fn test_submit_batch_unauthorized_sequencer() {
     let impostor = Address::generate(&ctx.env);
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
-    assert!(ctx.client.try_submit_rollup_batch(&impostor, &ctx.root(1), &creator, &token, &100, &1).is_err());
+    assert!(ctx
+        .client
+        .try_submit_rollup_batch(&impostor, &ctx.root(1), &creator, &token, &100, &1)
+        .is_err());
 }
 
 #[test]
@@ -112,7 +128,10 @@ fn test_submit_batch_invalid_amount() {
     let ctx = Ctx::new();
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
-    assert!(ctx.client.try_submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &0, &0).is_err());
+    assert!(ctx
+        .client
+        .try_submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &0, &0)
+        .is_err());
 }
 
 // ── finalization ──────────────────────────────────────────────────────────────
@@ -123,7 +142,9 @@ fn test_finalize_after_challenge_period() {
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
     ctx.advance_past_challenge();
     ctx.client.finalize_rollup_batch(&id);
 
@@ -141,7 +162,9 @@ fn test_finalize_before_challenge_period_fails() {
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
     // Do NOT advance time
     assert!(ctx.client.try_finalize_rollup_batch(&id).is_err());
 }
@@ -152,7 +175,9 @@ fn test_finalize_credits_creator_balance() {
     let creator = Address::generate(&ctx.env);
     let token = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &500, &5);
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &500, &5);
     ctx.advance_past_challenge();
     ctx.client.finalize_rollup_batch(&id);
 
@@ -171,9 +196,13 @@ fn test_fraud_proof_accepted_on_root_mismatch() {
     let token = Address::generate(&ctx.env);
     let challenger = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
     // Submit fraud proof with a different root
-    let accepted = ctx.client.submit_fraud_proof(&challenger, &id, &ctx.root(99));
+    let accepted = ctx
+        .client
+        .submit_fraud_proof(&challenger, &id, &ctx.root(99));
     assert!(accepted);
 
     let batch = ctx.client.get_rollup_batch(&id).unwrap();
@@ -192,7 +221,9 @@ fn test_fraud_proof_rejected_on_matching_root() {
     let challenger = Address::generate(&ctx.env);
     let root = ctx.root(1);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &root, &creator, &token, &1000, &10);
+    let id = ctx
+        .client
+        .submit_rollup_batch(&ctx.sequencer, &root, &creator, &token, &1000, &10);
     // Same root — no fraud
     let accepted = ctx.client.submit_fraud_proof(&challenger, &id, &root);
     assert!(!accepted);
@@ -208,9 +239,14 @@ fn test_fraud_proof_after_challenge_period_fails() {
     let token = Address::generate(&ctx.env);
     let challenger = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
     ctx.advance_past_challenge();
-    assert!(ctx.client.try_submit_fraud_proof(&challenger, &id, &ctx.root(99)).is_err());
+    assert!(ctx
+        .client
+        .try_submit_fraud_proof(&challenger, &id, &ctx.root(99))
+        .is_err());
 }
 
 #[test]
@@ -220,8 +256,11 @@ fn test_get_fraud_proof() {
     let token = Address::generate(&ctx.env);
     let challenger = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
-    ctx.client.submit_fraud_proof(&challenger, &id, &ctx.root(99));
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    ctx.client
+        .submit_fraud_proof(&challenger, &id, &ctx.root(99));
 
     let proof = ctx.client.get_fraud_proof(&id).unwrap();
     assert_eq!(proof.batch_id, id);
@@ -236,8 +275,11 @@ fn test_challenged_batch_cannot_be_finalized() {
     let token = Address::generate(&ctx.env);
     let challenger = Address::generate(&ctx.env);
 
-    let id = ctx.client.submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
-    ctx.client.submit_fraud_proof(&challenger, &id, &ctx.root(99));
+    let id =
+        ctx.client
+            .submit_rollup_batch(&ctx.sequencer, &ctx.root(1), &creator, &token, &1000, &10);
+    ctx.client
+        .submit_fraud_proof(&challenger, &id, &ctx.root(99));
     ctx.advance_past_challenge();
 
     assert!(ctx.client.try_finalize_rollup_batch(&id).is_err());

@@ -40,7 +40,10 @@ fn main() -> Result<()> {
 
     println!("=== TipJar Gas Analysis Report ===");
     println!("Generated: {}\n", report.timestamp);
-    println!("{:<45} {:>18} {:>14}", "Function", "CPU Instructions", "Memory Bytes");
+    println!(
+        "{:<45} {:>18} {:>14}",
+        "Function", "CPU Instructions", "Memory Bytes"
+    );
     println!("{}", "-".repeat(80));
 
     let mut any_recommendation = false;

@@ -1,7 +1,13 @@
 use soroban_sdk::{symbol_short, token, Address, Env};
 
 use crate::bridge::{validator, BridgeDataKey, BridgeTip};
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, BridgeKey, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
 
 /// Processes a bridged tip submitted by an authorised relayer.
 ///
@@ -9,7 +15,11 @@ use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingE
 /// Validates the tip, transfers funds from the relayer into contract escrow,
 /// deducts bridge fees, credits the creator's balance, emits bridge events, and
 /// marks the source transaction as processed (replay protection).
-pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Result<(), TipJarError> {
+pub fn process_bridge_tip(
+    env: &Env,
+    relayer: &Address,
+    tip: &BridgeTip,
+) -> Result<(), TipJarError> {
     // 1. Check bridge is enabled.
     let enabled: bool = env
         .storage()
@@ -59,11 +69,15 @@ pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Resu
     // 8. Credit creator balance and historical total.
     let bal_key = DataKey::CreatorBalance(tip.creator.clone(), token_address.clone());
     let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-    env.storage().persistent().set(&bal_key, &(balance + net_amount));
+    env.storage()
+        .persistent()
+        .set(&bal_key, &(balance + net_amount));
 
     let tot_key = DataKey::CreatorTotal(tip.creator.clone(), token_address.clone());
     let total: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-    env.storage().persistent().set(&tot_key, &(total + tip.amount));
+    env.storage()
+        .persistent()
+        .set(&tot_key, &(total + tip.amount));
 
     // 9. Accumulate bridge fees if any.
     if fee > 0 {
@@ -78,7 +92,12 @@ pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Resu
     // 11. Emit bridge events.
     env.events().publish(
         (symbol_short!("bridge"), tip.creator.clone()),
-        (tip.source_chain.clone(), tip.source_tx_hash.clone(), tip.amount, fee),
+        (
+            tip.source_chain.clone(),
+            tip.source_tx_hash.clone(),
+            tip.amount,
+            fee,
+        ),
     );
 
     if fee > 0 {
@@ -90,4 +109,3 @@ pub fn process_bridge_tip(env: &Env, relayer: &Address, tip: &BridgeTip) -> Resu
 
     Ok(())
 }
-

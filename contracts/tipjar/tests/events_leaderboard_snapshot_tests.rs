@@ -13,7 +13,13 @@ use tipjar::{
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 

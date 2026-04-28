@@ -42,18 +42,18 @@ pub fn batch_open(
         proofs_out.push_back(individual[i].clone());
     }
 
-    BatchProof { proofs: proofs_out, gamma, agg_eval }
+    BatchProof {
+        proofs: proofs_out,
+        gamma,
+        agg_eval,
+    }
 }
 
 /// Verifies a BatchProof against a list of (polynomial, commitment) pairs.
 ///
 /// Returns true iff every individual proof is valid AND the aggregated
 /// evaluation matches the claimed agg_eval.
-pub fn batch_verify(
-    env: &Env,
-    polys: &[(Polynomial, PolyCommitment)],
-    batch: &BatchProof,
-) -> bool {
+pub fn batch_verify(env: &Env, polys: &[(Polynomial, PolyCommitment)], batch: &BatchProof) -> bool {
     let n = polys.len().min(batch.proofs.len() as usize);
     let mut agg_eval = 0u64;
     let mut gamma_pow = 1u64;

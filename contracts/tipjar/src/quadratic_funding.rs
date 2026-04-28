@@ -117,11 +117,7 @@ pub fn create_round(
         panic_with_error!(env, QFError::InvalidAmount);
     }
 
-    let round_id: u64 = env
-        .storage()
-        .instance()
-        .get(&QFKey::RoundCtr)
-        .unwrap_or(0);
+    let round_id: u64 = env.storage().instance().get(&QFKey::RoundCtr).unwrap_or(0);
     env.storage()
         .instance()
         .set(&QFKey::RoundCtr, &(round_id + 1));
@@ -226,7 +222,9 @@ pub fn contribute(
 
     // Update round totals.
     round.total_contributions = round.total_contributions.saturating_add(amount);
-    env.storage().persistent().set(&QFKey::Round(round_id), &round);
+    env.storage()
+        .persistent()
+        .set(&QFKey::Round(round_id), &round);
 
     // Transfer contribution into contract escrow.
     token::Client::new(env, &round.token).transfer(
@@ -260,7 +258,9 @@ pub fn finalize_round(env: &Env, admin: &Address, round_id: u64) {
     }
 
     round.status = RoundStatus::Finalized;
-    env.storage().persistent().set(&QFKey::Round(round_id), &round);
+    env.storage()
+        .persistent()
+        .set(&QFKey::Round(round_id), &round);
 
     env.events()
         .publish((symbol_short!("qf_fin"),), (round_id,));
@@ -357,7 +357,9 @@ pub fn distribute_matching(env: &Env, admin: &Address, round_id: u64) {
     }
 
     round.status = RoundStatus::Distributed;
-    env.storage().persistent().set(&QFKey::Round(round_id), &round);
+    env.storage()
+        .persistent()
+        .set(&QFKey::Round(round_id), &round);
 
     env.events()
         .publish((symbol_short!("qf_done"),), (round_id, distributed));
@@ -375,9 +377,11 @@ pub fn get_contribution(
     project: &Address,
     contributor: &Address,
 ) -> Option<Contribution> {
-    env.storage()
-        .persistent()
-        .get(&QFKey::Contribution(round_id, project.clone(), contributor.clone()))
+    env.storage().persistent().get(&QFKey::Contribution(
+        round_id,
+        project.clone(),
+        contributor.clone(),
+    ))
 }
 
 /// Returns the quadratic match estimate for a project in an active round.

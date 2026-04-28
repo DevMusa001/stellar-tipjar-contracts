@@ -4,12 +4,18 @@
 //! and calculating appropriate token amounts based on oracle prices and
 //! collateralization ratios.
 
-use soroban_sdk::{token, Address, Env};
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
-use super::types::SyntheticAsset;
 use super::events::emit_synthetic_tokens_minted;
 use super::oracle::get_oracle_price;
-use super::supply::{update_supply, update_collateral};
+use super::supply::{update_collateral, update_supply};
+use super::types::SyntheticAsset;
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
+use soroban_sdk::{token, Address, Env};
 
 /// Calculates required collateral for minting synthetic tokens
 ///
@@ -72,12 +78,7 @@ pub fn calculate_required_collateral(
 ///
 /// # Requirements
 /// - Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 12.2, 12.4, 12.5, 12.7
-pub fn mint(
-    env: &Env,
-    user: &Address,
-    asset_id: u64,
-    amount: i128,
-) -> Result<i128, TipJarError> {
+pub fn mint(env: &Env, user: &Address, asset_id: u64, amount: i128) -> Result<i128, TipJarError> {
     // Validate amount is positive
     if amount <= 0 {
         return Err(CoreError::InvalidAmount);
@@ -106,12 +107,11 @@ pub fn mint(
     token_contract.transfer(user, &asset.creator, &required_collateral);
 
     // Lock collateral in tip pool (update SyntheticCollateral storage)
-    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone()));
-    let current_locked: i128 = env
-        .storage()
-        .persistent()
-        .get(&collateral_key)
-        .unwrap_or(0);
+    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(
+        asset.creator.clone(),
+        asset.backing_token.clone(),
+    ));
+    let current_locked: i128 = env.storage().persistent().get(&collateral_key).unwrap_or(0);
     let new_locked = current_locked
         .checked_add(required_collateral)
         .ok_or(CoreError::InvalidAmount)?;
@@ -119,11 +119,7 @@ pub fn mint(
 
     // Mint synthetic tokens to user (update SyntheticBalance storage)
     let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(user.clone(), asset_id));
-    let current_balance: i128 = env
-        .storage()
-        .persistent()
-        .get(&balance_key)
-        .unwrap_or(0);
+    let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
     let new_balance = current_balance
         .checked_add(amount)
         .ok_or(CoreError::InvalidAmount)?;

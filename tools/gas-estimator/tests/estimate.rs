@@ -18,8 +18,8 @@ extern crate std;
 
 use chrono::Utc;
 use gas_estimator::{
-    generate_comparisons, generate_suggestions, make_batch_estimate, make_estimate,
-    append_to_history, EstimationReport, GasEstimate,
+    append_to_history, generate_comparisons, generate_suggestions, make_batch_estimate,
+    make_estimate, EstimationReport, GasEstimate,
 };
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -191,12 +191,19 @@ fn measure_get_total_tips_warm() -> GasEstimate {
 // ── tip_split — 3 and 10 recipients ──────────────────────────────────────────
 
 fn build_recipients(env: &Env, count: u32) -> SorobanVec<TipRecipient> {
-    assert!(count >= 2 && count <= 10, "tip_split requires 2–10 recipients");
+    assert!(
+        count >= 2 && count <= 10,
+        "tip_split requires 2–10 recipients"
+    );
     let mut recipients = SorobanVec::new(env);
     let share_each = 10_000u32 / count;
     let remainder = 10_000u32 - share_each * count;
     for i in 0..count {
-        let pct = if i == 0 { share_each + remainder } else { share_each };
+        let pct = if i == 0 {
+            share_each + remainder
+        } else {
+            share_each
+        };
         recipients.push_back(TipRecipient {
             creator: Address::generate(env),
             percentage: pct,
@@ -246,7 +253,11 @@ fn measure_get_leaderboard_1() -> GasEstimate {
     client.tip(&sender, &creator, &token_id, &1_000);
 
     env.budget().reset_default();
-    client.get_leaderboard(&tipjar::TimePeriod::AllTime, &tipjar::ParticipantKind::Creator, &10u32);
+    client.get_leaderboard(
+        &tipjar::TimePeriod::AllTime,
+        &tipjar::ParticipantKind::Creator,
+        &10u32,
+    );
     let cpu = env.budget().cpu_instruction_count();
     let mem = env.budget().memory_bytes_count();
     println!("[GAS] get_leaderboard (1-creator)  cpu={cpu}  mem={mem}");
@@ -264,7 +275,11 @@ fn measure_get_leaderboard_10() -> GasEstimate {
     }
 
     env.budget().reset_default();
-    client.get_leaderboard(&tipjar::TimePeriod::AllTime, &tipjar::ParticipantKind::Creator, &10u32);
+    client.get_leaderboard(
+        &tipjar::TimePeriod::AllTime,
+        &tipjar::ParticipantKind::Creator,
+        &10u32,
+    );
     let cpu = env.budget().cpu_instruction_count();
     let mem = env.budget().memory_bytes_count();
     println!("[GAS] get_leaderboard (10-creators)  cpu={cpu}  mem={mem}");
@@ -407,8 +422,14 @@ fn run_all_estimates() {
     // ── Batch estimates ───────────────────────────────────────────────────────
     // tip_batch is not yet implemented in the contract; extrapolate from
     // cold (first item) + warm (remaining N-1 items) single-tip measurements.
-    let tip_cold = estimates.iter().find(|e| e.function_name == "tip" && e.storage_variant == "cold").unwrap();
-    let tip_warm = estimates.iter().find(|e| e.function_name == "tip" && e.storage_variant == "warm").unwrap();
+    let tip_cold = estimates
+        .iter()
+        .find(|e| e.function_name == "tip" && e.storage_variant == "cold")
+        .unwrap();
+    let tip_warm = estimates
+        .iter()
+        .find(|e| e.function_name == "tip" && e.storage_variant == "warm")
+        .unwrap();
 
     let batch_estimates: std::vec::Vec<_> = [10u32, 25, 50, 100]
         .iter()
@@ -462,8 +483,11 @@ fn run_all_estimates() {
     for b in &report.batch_estimates {
         println!(
             "  {:<30} {:>5} {:>18} {:>16.8} {:>16.8}",
-            b.operation, b.batch_size, b.total_cpu_instructions,
-            b.total_cost_xlm, b.cost_per_item_xlm,
+            b.operation,
+            b.batch_size,
+            b.total_cpu_instructions,
+            b.total_cost_xlm,
+            b.cost_per_item_xlm,
         );
     }
 

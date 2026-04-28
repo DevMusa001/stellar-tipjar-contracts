@@ -3,12 +3,18 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, BytesN as _},
-    Address, Env, BytesN, Vec,
+    testutils::{Address as _, BytesN as _, Ledger},
+    Address, BytesN, Env, Vec,
 };
-use tipjar::{TipJarContract, TipJarContractClient, TipJarError, ClaimStatus, InsurancePoolConfig};
+use tipjar::{ClaimStatus, InsurancePoolConfig, TipJarContract, TipJarContractClient, TipJarError};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -37,14 +43,13 @@ fn test_insurance_config() {
     let (env, client, _sender, admin, _token) = setup();
 
     client.insurance_set_config(
-        &admin,
-        &100i128,    // min_contribution
-        &10000i128,  // max_contribution
-        &200u32,     // premium_rate_bps (2%)
-        &5000u32,    // payout_ratio_bps (50%)
-        &3600u64,    // claim_cooldown
-        &100u32,     // admin_fee_bps
-        &100u32,     // tip_premium_bps (1%)
+        &admin, &100i128,   // min_contribution
+        &10000i128, // max_contribution
+        &200u32,    // premium_rate_bps (2%)
+        &5000u32,   // payout_ratio_bps (50%)
+        &3600u64,   // claim_cooldown
+        &100u32,    // admin_fee_bps
+        &100u32,    // tip_premium_bps (1%)
     );
 
     let config = client.insurance_get_config();
@@ -61,9 +66,7 @@ fn test_insurance_manual_contribution() {
     let (env, client, creator, admin, token) = setup();
 
     // Configure insurance
-    client.insurance_set_config(
-        &admin, &100, &10000, &200, &5000, &3600, &100, &100
-    );
+    client.insurance_set_config(&admin, &100, &10000, &200, &5000, &3600, &100, &100);
 
     // Fund creator for contribution
     let token_asset = soroban_sdk::token::StellarAssetClient::new(&env, &token);
@@ -90,9 +93,7 @@ fn test_tip_automatic_premium() {
     let creator = Address::generate(&env);
 
     // Configure insurance with 1% tip premium
-    client.insurance_set_config(
-        &admin, &100, &10000, &200, &5000, &3600, &100, &100
-    );
+    client.insurance_set_config(&admin, &100, &10000, &200, &5000, &3600, &100, &100);
 
     client.tip(&sender, &creator, &token, &10000i128);
 
@@ -114,14 +115,14 @@ fn test_tip_automatic_premium() {
 fn test_insurance_claim_flow() {
     let (env, client, creator, admin, token) = setup();
     let sender = Address::generate(&env);
-    
+
     // Fund sender
     let token_asset = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_asset.mint(&sender, &100000i128);
 
     // Configure insurance: 1% premium, 100% payout ratio for simplicity
     client.insurance_set_config(
-        &admin, &100, &100000, &200, &10000, &3600, &100, &1000 // 10% premium
+        &admin, &100, &100000, &200, &10000, &3600, &100, &1000, // 10% premium
     );
 
     // Tip creator to build pool and coverage
@@ -147,10 +148,10 @@ fn test_insurance_claim_flow() {
     // Pay claim
     let old_creator_bal = token_asset.balance(&creator);
     client.insurance_pay_claim(&admin, &claim_id);
-    
+
     let claim = client.insurance_get_claim(&claim_id);
     assert!(matches!(claim.status, ClaimStatus::Paid));
-    
+
     let new_creator_bal = token_asset.balance(&creator);
     assert_eq!(new_creator_bal - old_creator_bal, 500);
 
@@ -163,10 +164,8 @@ fn test_insurance_claim_flow() {
 #[should_panic(expected = "HostError: Error(Contract, #55)")] // NoCoverage
 fn test_claim_without_coverage_fails() {
     let (env, client, creator, admin, token) = setup();
-    
-    client.insurance_set_config(
-        &admin, &100, &10000, &200, &5000, &3600, &100, &100
-    );
+
+    client.insurance_set_config(&admin, &100, &10000, &200, &5000, &3600, &100, &100);
 
     let tx_hash = BytesN::from_array(&env, &[0u8; 32]);
     client.insurance_submit_claim(&creator, &token, &500i128, &tx_hash);
@@ -179,11 +178,11 @@ fn test_claim_exceeding_coverage_fails() {
     let creator = Address::generate(&env);
 
     client.insurance_set_config(
-        &admin, &100, &10000, &200, &5000, &3600, &100, &100 // 50% payout ratio
+        &admin, &100, &10000, &200, &5000, &3600, &100, &100, // 50% payout ratio
     );
 
     // Tip to build coverage
-    client.tip(&sender, &creator, &token, &2000i128); 
+    client.tip(&sender, &creator, &token, &2000i128);
     // Net=1980. Premium=20. Coverage = 19 * 50% = 9.
 
     let tx_hash = BytesN::from_array(&env, &[0u8; 32]);
@@ -194,15 +193,13 @@ fn test_claim_exceeding_coverage_fails() {
 fn test_insurance_batch_processing() {
     let (env, client, creator, admin, token) = setup();
     let sender = Address::generate(&env);
-    
+
     // Fund sender
     let token_asset = soroban_sdk::token::StellarAssetClient::new(&env, &token);
     token_asset.mint(&sender, &100000i128);
 
     // Configure insurance
-    client.insurance_set_config(
-        &admin, &100, &100000, &200, &10000, &3600, &100, &1000
-    );
+    client.insurance_set_config(&admin, &100, &100000, &200, &10000, &3600, &100, &1000);
 
     // Tip creator to build coverage
     client.tip(&sender, &creator, &token, &20000i128);
@@ -217,18 +214,38 @@ fn test_insurance_batch_processing() {
     claim_ids.push_back(claim_id_2);
 
     // Batch approve
-    client.insurance_process_claims_batch(&admin, &claim_ids, &soroban_sdk::String::from_str(&env, "approve"));
+    client.insurance_process_claims_batch(
+        &admin,
+        &claim_ids,
+        &soroban_sdk::String::from_str(&env, "approve"),
+    );
 
-    assert!(matches!(client.insurance_get_claim(&claim_id_1).status, ClaimStatus::Approved));
-    assert!(matches!(client.insurance_get_claim(&claim_id_2).status, ClaimStatus::Approved));
+    assert!(matches!(
+        client.insurance_get_claim(&claim_id_1).status,
+        ClaimStatus::Approved
+    ));
+    assert!(matches!(
+        client.insurance_get_claim(&claim_id_2).status,
+        ClaimStatus::Approved
+    ));
 
     // Batch pay
     let old_creator_bal = token_asset.balance(&creator);
-    client.insurance_process_claims_batch(&admin, &claim_ids, &soroban_sdk::String::from_str(&env, "pay"));
+    client.insurance_process_claims_batch(
+        &admin,
+        &claim_ids,
+        &soroban_sdk::String::from_str(&env, "pay"),
+    );
 
-    assert!(matches!(client.insurance_get_claim(&claim_id_1).status, ClaimStatus::Paid));
-    assert!(matches!(client.insurance_get_claim(&claim_id_2).status, ClaimStatus::Paid));
-    
+    assert!(matches!(
+        client.insurance_get_claim(&claim_id_1).status,
+        ClaimStatus::Paid
+    ));
+    assert!(matches!(
+        client.insurance_get_claim(&claim_id_2).status,
+        ClaimStatus::Paid
+    ));
+
     let new_creator_bal = token_asset.balance(&creator);
     assert_eq!(new_creator_bal - old_creator_bal, 800);
 

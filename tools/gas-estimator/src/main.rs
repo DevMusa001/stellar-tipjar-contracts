@@ -161,10 +161,17 @@ fn main() -> Result<()> {
 // ── Table output ──────────────────────────────────────────────────────────────
 
 fn print_table(report: &EstimationReport) {
-    println!("╔══════════════════════════════════════════════════════════════════════════════════╗");
+    println!(
+        "╔══════════════════════════════════════════════════════════════════════════════════╗"
+    );
     println!("║                  TipJar Gas Cost Estimation Report                              ║");
-    println!("╚══════════════════════════════════════════════════════════════════════════════════╝");
-    println!("  Generated : {}", report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "╚══════════════════════════════════════════════════════════════════════════════════╝"
+    );
+    println!(
+        "  Generated : {}",
+        report.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     println!("  Network   : {}", report.network);
     println!();
 
@@ -201,8 +208,12 @@ fn print_table(report: &EstimationReport) {
             let extrap = if b.is_extrapolated { "yes" } else { "no" };
             println!(
                 "  {:<35} {:>5}  {:>6}  {:>18}  {:>16.8}  {:>16.8}",
-                b.operation, b.batch_size, extrap,
-                b.total_cpu_instructions, b.total_cost_xlm, b.cost_per_item_xlm,
+                b.operation,
+                b.batch_size,
+                extrap,
+                b.total_cpu_instructions,
+                b.total_cost_xlm,
+                b.cost_per_item_xlm,
             );
         }
         println!();
@@ -213,7 +224,11 @@ fn print_table(report: &EstimationReport) {
         println!("Cost Comparisons");
         println!("{}", "─".repeat(90));
         for c in &report.comparisons {
-            let (arrow, sign) = if c.delta_cpu >= 0 { ("▲", "+") } else { ("▼", "") };
+            let (arrow, sign) = if c.delta_cpu >= 0 {
+                ("▲", "+")
+            } else {
+                ("▼", "")
+            };
             println!(
                 "  {:<55}  {}{}{:.1}%  ({}{} CPU)",
                 c.label, arrow, sign, c.delta_pct, sign, c.delta_cpu
@@ -228,8 +243,8 @@ fn print_table(report: &EstimationReport) {
         println!("{}", "─".repeat(90));
         for s in &report.suggestions {
             let icon = match s.severity {
-                Severity::Info     => "ℹ️ ",
-                Severity::Warning  => "⚠️ ",
+                Severity::Info => "ℹ️ ",
+                Severity::Warning => "⚠️ ",
                 Severity::Critical => "🔴",
             };
             println!("  {} [{}]  {}", icon, s.function, s.message);
@@ -246,7 +261,10 @@ fn print_table(report: &EstimationReport) {
 fn print_markdown(report: &EstimationReport) {
     println!("# TipJar Gas Cost Estimation Report");
     println!();
-    println!("**Generated:** {}  ", report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "**Generated:** {}  ",
+        report.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     println!("**Network:** {}  ", report.network);
     println!();
 
@@ -258,9 +276,12 @@ fn print_markdown(report: &EstimationReport) {
         let badge = md_badge(e.cpu_instructions);
         println!(
             "| `{}` | {} | {} {} | {} | `{:.8}` |",
-            e.function_name, e.storage_variant,
-            e.cpu_instructions, badge,
-            e.memory_bytes, e.estimated_cost_xlm,
+            e.function_name,
+            e.storage_variant,
+            e.cpu_instructions,
+            badge,
+            e.memory_bytes,
+            e.estimated_cost_xlm,
         );
     }
     println!();
@@ -274,8 +295,12 @@ fn print_markdown(report: &EstimationReport) {
             let extrap = if b.is_extrapolated { "✓" } else { "" };
             println!(
                 "| `{}` | {} | {} | {} | `{:.8}` | `{:.8}` |",
-                b.operation, b.batch_size, extrap,
-                b.total_cpu_instructions, b.total_cost_xlm, b.cost_per_item_xlm,
+                b.operation,
+                b.batch_size,
+                extrap,
+                b.total_cpu_instructions,
+                b.total_cost_xlm,
+                b.cost_per_item_xlm,
             );
         }
         println!();
@@ -290,8 +315,7 @@ fn print_markdown(report: &EstimationReport) {
             let sign = if c.delta_cpu >= 0 { "+" } else { "" };
             println!(
                 "| {} | {} | {} | {}{} | {}{:.1}% |",
-                c.label, c.baseline_cpu, c.candidate_cpu,
-                sign, c.delta_cpu, sign, c.delta_pct,
+                c.label, c.baseline_cpu, c.candidate_cpu, sign, c.delta_cpu, sign, c.delta_pct,
             );
         }
         println!();
@@ -302,8 +326,8 @@ fn print_markdown(report: &EstimationReport) {
         println!();
         for s in &report.suggestions {
             let level = match s.severity {
-                Severity::Info     => "INFO",
-                Severity::Warning  => "⚠️ WARNING",
+                Severity::Info => "INFO",
+                Severity::Warning => "⚠️ WARNING",
                 Severity::Critical => "🔴 CRITICAL",
             };
             println!("- **[{}] `{}`** — {}", level, s.function, s.message);
@@ -358,7 +382,10 @@ fn compare_baseline(baseline: &EstimationReport, current: &EstimationReport) -> 
                 key, base.cpu_instructions, cur.cpu_instructions, delta_pct, flag
             );
         } else {
-            println!("  {:<45} {:>14} {:>14}  (new)", key, "—", cur.cpu_instructions);
+            println!(
+                "  {:<45} {:>14} {:>14}  (new)",
+                key, "—", cur.cpu_instructions
+            );
         }
     }
 

@@ -1,11 +1,11 @@
+use chrono::{DateTime, Utc};
 /// Automated circuit breaker — trips after too many anomalies in a time window.
 use std::sync::Mutex;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitState {
-    Closed,   // normal operation
-    Open,     // tripped — all transactions blocked
+    Closed, // normal operation
+    Open,   // tripped — all transactions blocked
 }
 
 pub struct CircuitBreaker {

@@ -4,8 +4,8 @@
 //! allowing users to trade call and put options with automated pricing
 //! and exercise mechanisms.
 
-pub mod pricing;
 pub mod exercise;
+pub mod pricing;
 
 use soroban_sdk::{contracttype, Address, Env};
 
@@ -135,7 +135,7 @@ pub fn init_options(env: &Env) {
     env.storage()
         .persistent()
         .set(&DataKey::PricingParams, &params);
-    
+
     env.storage()
         .instance()
         .set(&DataKey::Option(OptionKey::OptionCounter), &0u64);
@@ -163,9 +163,7 @@ pub fn update_pricing_params(env: &Env, params: &PricingParams) {
 
 /// Get option contract by ID
 pub fn get_option(env: &Env, option_id: u64) -> Option<OptionContract> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Option(option_id))
+    env.storage().persistent().get(&DataKey::Option(option_id))
 }
 
 /// Get option contract or panic
@@ -203,11 +201,7 @@ pub fn update_position(env: &Env, position: &OptionPosition) {
 }
 
 /// Calculate required collateral for an option
-pub fn calculate_collateral(
-    option_type: OptionType,
-    strike_price: i128,
-    amount: i128,
-) -> i128 {
+pub fn calculate_collateral(option_type: OptionType, strike_price: i128, amount: i128) -> i128 {
     match option_type {
         OptionType::Call => {
             // For calls, collateral is the full amount of tokens
@@ -230,7 +224,7 @@ pub fn add_written_option(env: &Env, writer: &Address, option_id: u64) {
         .persistent()
         .get(&DataKey::WrittenOptions(writer.clone()))
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    
+
     if !options.contains(&option_id) {
         options.push_back(option_id);
         env.storage()
@@ -246,7 +240,7 @@ pub fn add_held_option(env: &Env, holder: &Address, option_id: u64) {
         .persistent()
         .get(&DataKey::HeldOptions(holder.clone()))
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    
+
     if !options.contains(&option_id) {
         options.push_back(option_id);
         env.storage()
@@ -262,7 +256,7 @@ pub fn remove_held_option(env: &Env, holder: &Address, option_id: u64) {
         .persistent()
         .get(&DataKey::HeldOptions(holder.clone()))
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    
+
     if let Some(index) = options.iter().position(|&id| id == option_id) {
         options.remove(index as u32);
         env.storage()
@@ -278,7 +272,7 @@ pub fn add_active_option(env: &Env, option_id: u64) {
         .persistent()
         .get(&DataKey::ActiveOptions)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    
+
     if !options.contains(&option_id) {
         options.push_back(option_id);
         env.storage()
@@ -294,7 +288,7 @@ pub fn remove_active_option(env: &Env, option_id: u64) {
         .persistent()
         .get(&DataKey::ActiveOptions)
         .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-    
+
     if let Some(index) = options.iter().position(|&id| id == option_id) {
         options.remove(index as u32);
         env.storage()
@@ -313,8 +307,8 @@ pub fn get_locked_collateral(env: &Env, address: &Address, token: &Address) -> i
 
 /// Update locked collateral
 pub fn update_locked_collateral(env: &Env, address: &Address, token: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Collateral(address.clone(), token.clone()), &amount);
+    env.storage().persistent().set(
+        &DataKey::Collateral(address.clone(), token.clone()),
+        &amount,
+    );
 }
-

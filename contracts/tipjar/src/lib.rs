@@ -2,11 +2,11 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
-pub mod interfaces;
-pub mod integrations;
-pub mod security;
 pub mod bridge;
+pub mod integrations;
+pub mod interfaces;
 pub mod privacy;
+pub mod security;
 pub mod synthetic;
 
 /// Polynomial commitment scheme for efficient tip data verification.
@@ -19,17 +19,17 @@ pub mod sidechain;
 pub mod rollup;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short,
-    token, Address, BytesN, Env, Map, String, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
+    Address, BytesN, Env, Map, String, Vec,
 };
 
 use circuit_breaker::{
-    EnhancedCircuitBreakerConfig, VolumeThresholds, CooldownConfig, CircuitBreakerError
+    CircuitBreakerError, CooldownConfig, EnhancedCircuitBreakerConfig, VolumeThresholds,
 };
 
-pub mod upgrade;
-pub mod storage;
 pub mod circuit_breaker;
+pub mod storage;
+pub mod upgrade;
 
 #[cfg(test)]
 extern crate std;
@@ -73,11 +73,16 @@ pub mod volatility;
 // Tip Index Funds
 pub mod index_fund;
 
+// Tip Time-Lock Puzzles
+pub mod time_lock_puzzle;
 // Bonding curves
 pub mod bonding_curve;
 
 // Quadratic funding
 pub mod quadratic_funding;
+
+// Retroactive public goods funding
+pub mod retroactive_funding;
 
 // TWAP oracle
 pub mod twap_oracle;
@@ -85,11 +90,32 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
-// Yield farming
-pub mod farming;
+// Tip state channels (off-chain tips with on-chain settlement)
+pub mod state_channel;
 
-// Liquidity mining
-pub mod liquidity_mining;
+// Meta-transactions for gasless tipping
+pub mod meta_tx;
+
+// Royalty splits for collaborative content and team tips
+pub mod royalty;
+
+// Zero-knowledge proofs for private tip verification
+pub mod zk_proof;
+
+// Cross-contract call routing and batch execution
+pub mod cross_contract;
+
+// Tip sharding for parallel processing
+pub mod sharding;
+
+// Tip validity proofs for lightweight verification
+pub mod validity_proof;
+
+// Verkle tree for efficient tip state proofs
+pub mod verkle_tree;
+
+// On-chain reputation system
+pub mod reputation;
 
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
@@ -202,6 +228,20 @@ pub struct BatchResult {
     pub success: bool,
     /// Zero-based index of this operation in the input vector.
     pub index: u32,
+}
+
+/// Cumulative statistics for all `batch_tip_multi` calls.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchStats {
+    /// Total number of `batch_tip_multi` invocations.
+    pub total_batches: u64,
+    /// Total number of individual tip operations that succeeded.
+    pub total_tips: u64,
+    /// Total token amount successfully tipped across all batches.
+    pub total_amount: i128,
+    /// Total number of operations that were skipped due to validation failure.
+    pub total_skipped: u64,
 }
 
 #[contracttype]
@@ -638,7 +678,7 @@ pub enum DataKey {
     /// Creator's currently withdrawable balance held by this contract per token.
     CreatorBalance(Address, Address), // (creator, token)
     /// Historical total tips ever received by creator per token.
-    CreatorTotal(Address, Address),   // (creator, token)
+    CreatorTotal(Address, Address), // (creator, token)
     /// List of token addresses a creator has ever received tips in.
     CreatorTokens(Address),
     /// Emergency pause state (bool).
@@ -783,6 +823,14 @@ pub enum DataKey {
     IndexFundShare(u64, Address),
     /// Creator allocation within a fund keyed by (fund_id, creator).
     IndexCreatorAlloc(u64, Address),
+    /// Time-lock puzzle record by ID.
+    TimeLockPuzzle(u64),
+    /// Global time-lock puzzle counter.
+    TimeLockPuzzleCounter,
+    /// List of puzzle IDs created by an address.
+    CreatorPuzzles(Address),
+    /// List of puzzle IDs targeting a recipient.
+    RecipientPuzzles(Address),
     /// TWAP oracle config and state keyed by oracle_id.
     TwapOracle(u64),
     /// Individual ring-buffer observation keyed by (oracle_id, slot_index).
@@ -857,20 +905,60 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
-    /// Farming pool record keyed by pool_id.
-    FarmingPool(u64),
-    /// Farming position keyed by (pool_id, staker).
-    FarmingPosition(u64, Address),
-    /// Global counter for farming pool IDs.
-    FarmingPoolCounter,
-    /// Liquidity mining program keyed by program_id.
-    LmProgram(u64),
-    /// Liquidity mining position keyed by (program_id, provider).
-    LmPosition(u64, Address),
-    /// Global counter for LM program IDs.
-    LmProgramCounter,
-    /// List of program IDs a provider has participated in.
-    LmProviderPrograms(Address),
+    /// Tip state channel record keyed by (tipper, creator, token).
+    TipChannel(Address, Address, Address),
+    /// Individual tip entry within a state channel keyed by (tipper, creator, token, index).
+    TipChannelEntry(Address, Address, Address, u64),
+    /// Per-sender meta-transaction nonce keyed by sender address.
+    MetaTxNonce(Address),
+    /// Trusted relayer flag keyed by relayer address.
+    MetaTxRelayer(Address),
+    /// Consumed request nullifier keyed by request hash (replay protection).
+    MetaTxNullifier(BytesN<32>),
+    /// Meta-transaction execution record keyed by record ID.
+    MetaTxRecord(u64),
+    /// Global meta-transaction record counter.
+    MetaTxCounter,
+    /// Commit-reveal round keyed by round ID.
+    CommitRevealRound(u64),
+    /// Commitment keyed by (round_id, participant).
+    CommitRevealCommitment(u64, Address),
+    /// Reveal keyed by (round_id, participant).
+    CommitRevealReveal(u64, Address),
+    /// List of round IDs created by a creator.
+    CommitRevealCreatorRounds(Address),
+    /// Global commit-reveal round counter.
+    CommitRevealCounter,
+    /// ZK circuit verification key keyed by circuit ID.
+    ZkCircuit(u64),
+    /// ZK proof keyed by proof ID.
+    ZkProof(u64),
+    /// Private tip with ZK proof keyed by tip ID.
+    ZkPrivateTip(u64),
+    /// Nullifier used flag keyed by nullifier hash.
+    ZkNullifier(BytesN<32>),
+    /// List of circuit IDs owned by an address.
+    ZkOwnerCircuits(Address),
+    /// List of proof IDs submitted by a prover.
+    ZkProverProofs(Address),
+    /// List of private tip IDs for a creator.
+    ZkCreatorPrivateTips(Address),
+    /// Global ZK circuit counter.
+    ZkCircuitCounter,
+    /// Global ZK proof counter.
+    ZkProofCounter,
+    /// Global ZK private tip counter.
+    ZkPrivateTipCounter,
+    /// Cross-contract call sub-keys.
+    CrossCall(cross_contract::CrossCallKey),
+    /// Sharding sub-keys.
+    Shard(sharding::ShardKey),
+    /// Validity proof sub-keys.
+    ValidityProof(validity_proof::ValidityProofKey),
+    /// Verkle tree sub-keys.
+    Verkle(verkle_tree::VerkleKey),
+    /// Retroactive public goods funding sub-keys.
+    Retro(retroactive_funding::RetroKey),
 }
 
 #[contracterror]
@@ -1072,6 +1160,20 @@ pub enum CreditError {
     IndexDepositTooSmall = 103,
     /// Attempted to unpause a contract that is not currently paused.
     NotPaused = 104,
+    /// Time-lock puzzle not found.
+    PuzzleNotFound = 105,
+    /// Puzzle is not in Active status.
+    PuzzleNotActive = 106,
+    /// Puzzle unlock time has not been reached yet.
+    PuzzleTooEarly = 107,
+    /// Supplied secret/nonce does not match the puzzle commitment.
+    PuzzleWrongSolution = 108,
+    /// Puzzle has already been solved.
+    PuzzleAlreadySolved = 109,
+    /// Puzzle has been cancelled.
+    PuzzleCancelled = 110,
+    /// Caller is not the puzzle creator.
+    PuzzleUnauthorized = 111,
     /// TWAP oracle not found.
     TwapOracleNotFound = 105,
     /// TWAP oracle is inactive.
@@ -1216,7 +1318,125 @@ pub enum ChannelError {
     InvalidDisputeWindow = 208,
 }
 
+/// Errors specific to tip state channels.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum TipChannelError {
+    /// No tip channel exists for the given parties and token.
+    ChannelNotFound = 300,
+    /// Channel is not in the Open state.
+    ChannelNotOpen = 301,
+    /// Provided nonce is not strictly greater than the current nonce.
+    StaleNonce = 302,
+    /// Caller is not a party to this channel.
+    NotChannelParty = 303,
+    /// Deposit amount must be greater than zero.
+    InvalidDeposit = 304,
+    /// Dispute window must be greater than zero.
+    InvalidDisputeWindow = 305,
+    /// Tipped amount exceeds the channel deposit.
+    ExceedsDeposit = 306,
+    /// Tipped amount cannot decrease.
+    TippedAmountDecreased = 307,
+    /// Channel is already settled.
+    AlreadySettled = 308,
+}
 
+/// Errors for meta-transaction (gasless tip) operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum MetaTxError {
+    /// Relayer is not in the trusted relayer set.
+    UntrustedRelayer = 400,
+    /// Signed request has passed its `valid_until` timestamp.
+    RequestExpired = 401,
+    /// Provided nonce does not match the stored per-sender nonce.
+    InvalidNonce = 402,
+    /// This request hash has already been executed (replay attempt).
+    AlreadyExecuted = 403,
+    /// Ed25519 signature verification failed.
+    InvalidSignature = 404,
+    /// Tip amount in the request is invalid (≤ 0).
+    InvalidAmount = 405,
+    /// Token in the request is not whitelisted.
+    TokenNotWhitelisted = 406,
+    /// Relayer is already registered.
+    RelayerAlreadyRegistered = 407,
+    /// Relayer is not registered (cannot remove).
+    RelayerNotFound = 408,
+}
+
+/// Errors for commit-reveal operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum CommitRevealError {
+    /// Round not found.
+    RoundNotFound = 500,
+    /// Round is not in the commit phase.
+    NotInCommitPhase = 501,
+    /// Round is not in the reveal phase.
+    NotInRevealPhase = 502,
+    /// Commit phase has not started yet.
+    CommitPhaseNotStarted = 503,
+    /// Commit phase has ended.
+    CommitPhaseEnded = 504,
+    /// Reveal phase has ended.
+    RevealPhaseEnded = 505,
+    /// Participant has already committed.
+    AlreadyCommitted = 506,
+    /// Participant has already revealed.
+    AlreadyRevealed = 507,
+    /// No commitment found for this participant.
+    NoCommitment = 508,
+    /// Revealed value does not match commitment hash.
+    InvalidReveal = 509,
+    /// Round is already finalized or cancelled.
+    RoundNotActive = 510,
+    /// Commit duration is invalid (too short or too long).
+    InvalidCommitDuration = 511,
+    /// Reveal duration is invalid (too short or too long).
+    InvalidRevealDuration = 512,
+    /// Reveal phase has not ended yet.
+    RevealPhaseNotEnded = 513,
+    /// Commit phase has not ended yet.
+    CommitPhaseNotEnded = 514,
+}
+
+/// Errors for zero-knowledge proof operations.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ZkProofError {
+    /// Circuit not found.
+    CircuitNotFound = 600,
+    /// Circuit is not active.
+    CircuitNotActive = 601,
+    /// Proof not found.
+    ProofNotFound = 602,
+    /// Proof data exceeds maximum size.
+    ProofTooLarge = 603,
+    /// Too many public inputs.
+    TooManyPublicInputs = 604,
+    /// Nullifier has already been used.
+    NullifierUsed = 605,
+    /// Proof is not in pending status.
+    ProofNotPending = 606,
+    /// Proof has not been verified.
+    ProofNotVerified = 607,
+    /// Nullifier mismatch.
+    NullifierMismatch = 608,
+    /// Private tip not found.
+    PrivateTipNotFound = 609,
+    /// Private tip already claimed.
+    AlreadyClaimed = 610,
+    /// Caller is not the circuit owner.
+    NotCircuitOwner = 611,
+    /// Caller is not the tip creator.
+    NotTipCreator = 612,
+}
 
 #[contract]
 pub struct TipJarContract;
@@ -1271,26 +1491,36 @@ impl TipJarContract {
             .get(&DataKey::Auction(AuctionKey::CreatorList(creator.clone())))
             .unwrap_or_else(|| Vec::new(env));
         auctions.push_back(auction_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Auction(AuctionKey::CreatorList(creator.clone())), &auctions);
+        env.storage().persistent().set(
+            &DataKey::Auction(AuctionKey::CreatorList(creator.clone())),
+            &auctions,
+        );
     }
 
     fn get_auction_internal(env: &Env, auction_id: u64) -> Option<Auction> {
-        env.storage().persistent().get(&DataKey::Auction(AuctionKey::Record(auction_id)))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Auction(AuctionKey::Record(auction_id)))
     }
 
     // ── leaderboard helpers ──────────────────────────────────────────────────
 
-    fn update_leaderboard_stats(
-        env: &Env,
-        tipper: &Address,
-        creator: &Address,
-        amount: i128,
-    ) {
+    fn update_leaderboard_stats(env: &Env, tipper: &Address, creator: &Address, amount: i128) {
         const BUCKET_ALL_TIME: u32 = 0;
-        Self::update_aggregate(env, tipper, amount, BUCKET_ALL_TIME, ParticipantKind::Tipper);
-        Self::update_aggregate(env, creator, amount, BUCKET_ALL_TIME, ParticipantKind::Creator);
+        Self::update_aggregate(
+            env,
+            tipper,
+            amount,
+            BUCKET_ALL_TIME,
+            ParticipantKind::Tipper,
+        );
+        Self::update_aggregate(
+            env,
+            creator,
+            amount,
+            BUCKET_ALL_TIME,
+            ParticipantKind::Creator,
+        );
     }
 
     fn update_aggregate(
@@ -1304,15 +1534,15 @@ impl TipJarContract {
             ParticipantKind::Tipper => DataKey::Stats(StatsKey::TipperAgg(addr.clone(), bucket)),
             ParticipantKind::Creator => DataKey::Stats(StatsKey::CreatorAgg(addr.clone(), bucket)),
         };
-        let mut entry: LeaderboardEntry = env
-            .storage()
-            .persistent()
-            .get(&agg_key)
-            .unwrap_or(LeaderboardEntry {
-                address: addr.clone(),
-                total_amount: 0,
-                tip_count: 0,
-            });
+        let mut entry: LeaderboardEntry =
+            env.storage()
+                .persistent()
+                .get(&agg_key)
+                .unwrap_or(LeaderboardEntry {
+                    address: addr.clone(),
+                    total_amount: 0,
+                    tip_count: 0,
+                });
         entry.total_amount += amount;
         entry.tip_count += 1;
         env.storage().persistent().set(&agg_key, &entry);
@@ -1364,8 +1594,9 @@ impl TipJarContract {
         let mut account = match env
             .storage()
             .persistent()
-            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(env))
-        {
+            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(
+                &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(env),
+            ) {
             Some(acc) => acc,
             None => return amount_to_credit,
         };
@@ -1401,9 +1632,10 @@ impl TipJarContract {
 
         account.total_repaid += actual_repayment;
         account.last_update = env.ledger().timestamp();
-        env.storage()
-            .persistent()
-            .set(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(env), &account);
+        env.storage().persistent().set(
+            &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(env),
+            &account,
+        );
 
         // Repayment goes back to PlatformFeeBalance
         let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
@@ -1412,14 +1644,7 @@ impl TipJarContract {
             .instance()
             .set(&fee_key, &(platform_bal + actual_repayment));
 
-        Self::record_credit_event(
-            env,
-            creator,
-            token,
-            actual_repayment,
-            interest_paid,
-            true,
-        );
+        Self::record_credit_event(env, creator, token, actual_repayment, interest_paid, true);
 
         env.events().publish(
             (symbol_short!("repay_au"), creator.clone()),
@@ -1470,7 +1695,9 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Fee(FeeKey::BasisPoints), &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::Fee(FeeKey::BasisPoints), &0u32);
         env.storage().instance().set(&DataKey::RefundWindow, &0u64);
     }
 
@@ -1493,7 +1720,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::TokenWhitelist(token), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenWhitelist(token), &true);
     }
 
     /// Removes a token from the whitelist. Admin only.
@@ -1503,7 +1732,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::TokenWhitelist(token), &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::TokenWhitelist(token), &false);
     }
 
     /// Returns `true` if `token` is on the whitelist.
@@ -1566,12 +1797,16 @@ impl TipJarContract {
 
     /// Returns the current circuit breaker configuration.
     pub fn get_circuit_breaker_config(env: Env) -> Option<CircuitBreakerConfig> {
-        env.storage().instance().get(&DataKey::CircuitBreaker(CircuitBreakerKey::Cfg))
+        env.storage()
+            .instance()
+            .get(&DataKey::CircuitBreaker(CircuitBreakerKey::Cfg))
     }
 
     /// Returns the current circuit breaker state.
     pub fn get_circuit_breaker_state(env: Env) -> Option<CircuitBreakerState> {
-        env.storage().instance().get(&DataKey::CircuitBreaker(CircuitBreakerKey::State))
+        env.storage()
+            .instance()
+            .get(&DataKey::CircuitBreaker(CircuitBreakerKey::State))
     }
 
     /// Manually triggers the circuit breaker. Admin only.
@@ -1626,14 +1861,10 @@ impl TipJarContract {
     // ── Enhanced Circuit Breaker Functions ──────────────────────────────────
 
     /// Sets the enhanced circuit breaker configuration. Admin only.
-    /// 
+    ///
     /// Validates all configuration parameters before storing.
     /// Emits `("enhanced_cb_config",)` with data `admin`.
-    pub fn set_enhanced_cb_config(
-        env: Env, 
-        admin: Address, 
-        config: EnhancedCircuitBreakerConfig
-    ) {
+    pub fn set_enhanced_cb_config(env: Env, admin: Address, config: EnhancedCircuitBreakerConfig) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -1645,9 +1876,10 @@ impl TipJarContract {
             panic_with_error!(&env, CreditError::EnhancedCircuitBreakerError);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig), &config);
+        env.storage().instance().set(
+            &DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig),
+            &config,
+        );
 
         env.events().publish((symbol_short!("cb_cfg"),), admin);
     }
@@ -1660,7 +1892,7 @@ impl TipJarContract {
     }
 
     /// Initializes enhanced circuit breaker with default configuration. Admin only.
-    /// 
+    ///
     /// Creates default configuration if not already present.
     /// Emits `("enhanced_cb_init",)` with data `admin`.
     pub fn init_enhanced_cb(env: Env, admin: Address) {
@@ -1671,16 +1903,19 @@ impl TipJarContract {
         }
 
         // Only initialize if not already configured
-        if env.storage()
+        if env
+            .storage()
             .instance()
-            .has(&DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig)) {
+            .has(&DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig))
+        {
             return;
         }
 
         let default_config = EnhancedCircuitBreakerConfig::default_config();
-        env.storage()
-            .instance()
-            .set(&DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig), &default_config);
+        env.storage().instance().set(
+            &DataKey::CircuitBreaker(CircuitBreakerKey::EnhancedConfig),
+            &default_config,
+        );
 
         env.events().publish((symbol_short!("cb_init"),), admin);
     }
@@ -1747,15 +1982,10 @@ impl TipJarContract {
     }
 
     /// Sets token-specific circuit breaker limits. Admin only.
-    /// 
+    ///
     /// Stores token-specific limits separately from main configuration.
     /// Emits `("token_cb_limit",)` with data `(token, limit)`.
-    pub fn set_token_circuit_breaker_limit(
-        env: Env,
-        admin: Address,
-        token: Address,
-        limit: i128,
-    ) {
+    pub fn set_token_circuit_breaker_limit(env: Env, admin: Address, token: Address, limit: i128) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -1767,18 +1997,17 @@ impl TipJarContract {
         }
 
         // Store token-specific limit separately
-        env.storage()
-            .persistent()
-            .set(&DataKey::CircuitBreaker(CircuitBreakerKey::TokenLimits(token.clone())), &limit);
-
-        env.events().publish(
-            (symbol_short!("tk_cb_lmt"),), 
-            (token, limit)
+        env.storage().persistent().set(
+            &DataKey::CircuitBreaker(CircuitBreakerKey::TokenLimits(token.clone())),
+            &limit,
         );
+
+        env.events()
+            .publish((symbol_short!("tk_cb_lmt"),), (token, limit));
     }
 
     /// Removes token-specific circuit breaker limits. Admin only.
-    /// 
+    ///
     /// Reverts token to using global limits.
     /// Emits `("token_cb_remove",)` with data `token`.
     pub fn remove_token_circuit_breaker_limit(env: Env, admin: Address, token: Address) {
@@ -1788,9 +2017,9 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
 
-        env.storage()
-            .persistent()
-            .remove(&DataKey::CircuitBreaker(CircuitBreakerKey::TokenLimits(token.clone())));
+        env.storage().persistent().remove(&DataKey::CircuitBreaker(
+            CircuitBreakerKey::TokenLimits(token.clone()),
+        ));
 
         env.events().publish((symbol_short!("tk_cb_rmv"),), token);
     }
@@ -1802,7 +2031,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&symbol_short!("cr_cfg"), &config);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("cr_cfg"), &config);
     }
 
     /// Returns the current credit system configuration.
@@ -1866,7 +2097,9 @@ impl TipJarContract {
         let mut account = env
             .storage()
             .persistent()
-            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env))
+            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(
+                &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env),
+            )
             .unwrap_or(CreditAccount {
                 principal: 0,
                 interest_accrued: 0,
@@ -1904,9 +2137,10 @@ impl TipJarContract {
         account.principal += amount;
         account.total_borrowed += amount;
         account.last_update = env.ledger().timestamp();
-        env.storage()
-            .persistent()
-            .set(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env), &account);
+        env.storage().persistent().set(
+            &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env),
+            &account,
+        );
 
         Self::record_credit_event(&env, &creator, &token, amount, 0, false);
 
@@ -1925,7 +2159,9 @@ impl TipJarContract {
         let mut account = env
             .storage()
             .persistent()
-            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env))
+            .get::<soroban_sdk::Vec<soroban_sdk::Val>, CreditAccount>(
+                &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env),
+            )
             .unwrap_or_else(|| panic_with_error!(&env, OtherError::NoActiveCredit));
 
         let config = env
@@ -1969,9 +2205,10 @@ impl TipJarContract {
 
         account.total_repaid += actual_repayment;
         account.last_update = env.ledger().timestamp();
-        env.storage()
-            .persistent()
-            .set(&(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env), &account);
+        env.storage().persistent().set(
+            &(symbol_short!("cr_acc"), creator.clone(), token.clone()).into_val(&env),
+            &account,
+        );
 
         let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
         let platform_bal: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
@@ -2027,45 +2264,58 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let fee_bp: u32 = env.storage().instance().get(&DataKey::Fee(FeeKey::BasisPoints)).unwrap_or(0);
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Fee(FeeKey::BasisPoints))
+            .unwrap_or(0);
         let fee: i128 = (amount * fee_bp as i128) / 10_000;
 
         // --- Insurance Premium Calculation ---
-        let ins_enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let ins_enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         let mut ins_premium: i128 = 0;
         if ins_enabled {
-            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg)) {
+            if let Some(config) = env
+                .storage()
+                .instance()
+                .get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg))
+            {
                 ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
             }
         }
 
-        let creator_amount = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
+        let creator_amount = amount
+            .checked_sub(fee)
+            .and_then(|a| a.checked_sub(ins_premium))
+            .unwrap_or(0);
 
         // ── state updates before external call (CEI pattern) ─────────────────
         if fee > 0 {
             let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
             let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
-            let new_fee_bal: i128 = current_fee
-                .checked_add(fee)
-                .expect("fee overflow");
+            let new_fee_bal: i128 = current_fee.checked_add(fee).expect("fee overflow");
             env.storage().instance().set(&fee_key, &new_fee_bal);
         }
 
         if ins_premium > 0 {
             let pool_key = DataKey::Insurance(InsuranceKey::Token(token.clone()));
-            let mut pool: InsurancePool = env
-                .storage()
-                .persistent()
-                .get(&pool_key)
-                .unwrap_or_else(|| InsurancePool {
-                    token: token.clone(),
-                    total_reserves: 0,
-                    total_contributions: 0,
-                    total_claims_paid: 0,
-                    active_claims: 0,
-                    total_claims: 0,
-                    last_payout_time: env.ledger().timestamp(),
-                });
+            let mut pool: InsurancePool =
+                env.storage()
+                    .persistent()
+                    .get(&pool_key)
+                    .unwrap_or_else(|| InsurancePool {
+                        token: token.clone(),
+                        total_reserves: 0,
+                        total_contributions: 0,
+                        total_claims_paid: 0,
+                        active_claims: 0,
+                        total_claims: 0,
+                        last_payout_time: env.ledger().timestamp(),
+                    });
             pool.total_reserves += ins_premium;
             env.storage().persistent().set(&pool_key, &pool);
         }
@@ -2073,18 +2323,32 @@ impl TipJarContract {
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
         let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
         let net_amount = Self::process_repayment(&env, &creator, &token, creator_amount);
-        let new_bal: i128 = existing_bal.checked_add(net_amount).expect("balance overflow");
+        let new_bal: i128 = existing_bal
+            .checked_add(net_amount)
+            .expect("balance overflow");
         env.storage().persistent().set(&bal_key, &new_bal);
 
         let tot_key = DataKey::CreatorTotal(creator.clone(), token.clone());
         let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        let new_tot: i128 = existing_tot.checked_add(creator_amount).expect("total overflow");
+        let new_tot: i128 = existing_tot
+            .checked_add(creator_amount)
+            .expect("total overflow");
         env.storage().persistent().set(&tot_key, &new_tot);
 
-        let tip_id: u64 = env.storage().instance().get(&DataKey::Tip(TipKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Tip(TipKey::Ctr), &(tip_id + 1));
+        let tip_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Tip(TipKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Tip(TipKey::Ctr), &(tip_id + 1));
 
         Self::update_leaderboard_stats(&env, &sender, &creator, creator_amount);
+
+        // Record reputation for tipper and creator
+        reputation::record_tip_sent(&env, &sender, amount);
+        reputation::record_tip_received(&env, &creator, creator_amount);
 
         // Track which tokens this creator has received
         Self::track_creator_token(&env, &creator, &token);
@@ -2093,7 +2357,11 @@ impl TipJarContract {
         Self::check_and_award_milestones(&env, &creator, &token, new_tot);
 
         // ── external call last ───────────────────────────────────────────────
-        token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(
+            &sender,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         env.events().publish(
             (symbol_short!("tip"), creator.clone()),
@@ -2110,14 +2378,21 @@ impl TipJarContract {
         Self::require_not_paused(&env);
         creator.require_auth();
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
-        let amount: i128 = env.storage().persistent().get(&bal_key)
+        let amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&bal_key)
             .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
         if amount == 0 {
             panic_with_error!(&env, TipJarError::NothingToWithdraw);
         }
         Self::check_and_update_withdrawal_limits(&env, &creator, amount);
         env.storage().persistent().set(&bal_key, &0i128);
-        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &creator, &amount);
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &creator,
+            &amount,
+        );
         events::emit_withdraw_event(&env, &creator, amount, &token);
     }
 
@@ -2136,7 +2411,10 @@ impl TipJarContract {
         }
 
         let bal_key = DataKey::CreatorBalance(creator.clone(), token.clone());
-        let current_balance: i128 = env.storage().persistent().get(&bal_key)
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&bal_key)
             .unwrap_or_else(|| env.storage().instance().get(&bal_key).unwrap_or(0));
 
         if amount > current_balance {
@@ -2148,7 +2426,11 @@ impl TipJarContract {
         let new_balance = current_balance - amount;
         env.storage().persistent().set(&bal_key, &new_balance);
 
-        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &creator, &amount);
+        token::Client::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &creator,
+            &amount,
+        );
         events::emit_withdraw_event(&env, &creator, amount, &token);
     }
 
@@ -2181,8 +2463,14 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let auction_id: u64 = env.storage().instance().get(&DataKey::Auction(AuctionKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Auction(AuctionKey::Ctr), &(auction_id + 1));
+        let auction_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Auction(AuctionKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Auction(AuctionKey::Ctr), &(auction_id + 1));
 
         let now = env.ledger().timestamp();
         let ends_at = now.saturating_add(duration_seconds);
@@ -2198,12 +2486,20 @@ impl TipJarContract {
             settled: false,
         };
 
-        env.storage().persistent().set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
         Self::add_creator_auction(&env, &creator, auction_id);
 
         env.events().publish(
             (symbol_short!("auc_crt"),),
-            (auction_id, creator.clone(), token.clone(), reserve_price, ends_at),
+            (
+                auction_id,
+                creator.clone(),
+                token.clone(),
+                reserve_price,
+                ends_at,
+            ),
         );
         auction_id
     }
@@ -2247,7 +2543,9 @@ impl TipJarContract {
 
         auction.highest_bid = amount;
         auction.highest_bidder = Some(bidder.clone());
-        env.storage().persistent().set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
 
         token::Client::new(&env, &auction.token).transfer(
             &bidder,
@@ -2295,7 +2593,9 @@ impl TipJarContract {
         }
 
         auction.settled = true;
-        env.storage().persistent().set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Auction(AuctionKey::Record(auction_id)), &auction);
 
         if auction.highest_bid == 0 || auction.highest_bid < auction.reserve_price {
             if let Some(winner) = auction.highest_bidder {
@@ -2312,10 +2612,18 @@ impl TipJarContract {
             return;
         }
 
-        let fee_bp: u32 = env.storage().instance().get(&DataKey::Fee(FeeKey::BasisPoints)).unwrap_or(0);
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Fee(FeeKey::BasisPoints))
+            .unwrap_or(0);
         let fee: i128 = (auction.highest_bid * fee_bp as i128) / 10_000;
         let mut ins_premium: i128 = 0;
-        let ins_enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let ins_enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         if ins_enabled {
             if let Some(config) = env
                 .storage()
@@ -2340,19 +2648,19 @@ impl TipJarContract {
 
         if ins_premium > 0 {
             let pool_key = DataKey::Insurance(InsuranceKey::Token(auction.token.clone()));
-            let mut pool: InsurancePool = env
-                .storage()
-                .persistent()
-                .get(&pool_key)
-                .unwrap_or_else(|| InsurancePool {
-                    token: auction.token.clone(),
-                    total_reserves: 0,
-                    total_contributions: 0,
-                    total_claims_paid: 0,
-                    active_claims: 0,
-                    total_claims: 0,
-                    last_payout_time: env.ledger().timestamp(),
-                });
+            let mut pool: InsurancePool =
+                env.storage()
+                    .persistent()
+                    .get(&pool_key)
+                    .unwrap_or_else(|| InsurancePool {
+                        token: auction.token.clone(),
+                        total_reserves: 0,
+                        total_contributions: 0,
+                        total_claims_paid: 0,
+                        active_claims: 0,
+                        total_claims: 0,
+                        last_payout_time: env.ledger().timestamp(),
+                    });
             pool.total_reserves = pool
                 .total_reserves
                 .checked_add(ins_premium)
@@ -2363,7 +2671,8 @@ impl TipJarContract {
         if creator_amount > 0 {
             let bal_key = DataKey::CreatorBalance(creator.clone(), auction.token.clone());
             let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-            let net_amount = Self::process_repayment(&env, &creator, &auction.token, creator_amount);
+            let net_amount =
+                Self::process_repayment(&env, &creator, &auction.token, creator_amount);
             let new_bal = existing_bal
                 .checked_add(net_amount)
                 .expect("balance overflow");
@@ -2385,13 +2694,20 @@ impl TipJarContract {
 
         env.events().publish(
             (symbol_short!("auc_sett"),),
-            (auction_id, creator.clone(), auction.highest_bid, auction.token.clone()),
+            (
+                auction_id,
+                creator.clone(),
+                auction.highest_bid,
+                auction.token.clone(),
+            ),
         );
     }
 
     /// Returns auction details by ID.
     pub fn get_auction(env: Env, auction_id: u64) -> Option<Auction> {
-        env.storage().persistent().get(&DataKey::Auction(AuctionKey::Record(auction_id)))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Auction(AuctionKey::Record(auction_id)))
     }
 
     /// Returns the auction IDs created by a given creator.
@@ -2433,9 +2749,10 @@ impl TipJarContract {
             active: true,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())), &delegation);
+        env.storage().persistent().set(
+            &DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())),
+            &delegation,
+        );
         Self::add_delegate(&env, &creator, &delegate);
         Self::append_delegation_history(&env, &creator, &delegation);
 
@@ -2465,7 +2782,10 @@ impl TipJarContract {
         let mut delegation: Delegation = env
             .storage()
             .persistent()
-            .get(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())))
+            .get(&DataKey::Delegation(DelegationKey::Active(
+                creator.clone(),
+                delegate.clone(),
+            )))
             .unwrap_or_else(|| panic_with_error!(&env, FeatureError::DelegationNotFound));
 
         if !delegation.active {
@@ -2474,14 +2794,20 @@ impl TipJarContract {
         let now = env.ledger().timestamp();
         if now > delegation.expires_at {
             delegation.active = false;
-            env.storage()
-                .persistent()
-                .set(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())), &delegation);
+            env.storage().persistent().set(
+                &DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())),
+                &delegation,
+            );
             Self::remove_delegate(&env, &creator, &delegate);
             Self::append_delegation_history(&env, &creator, &delegation);
             panic_with_error!(&env, FeatureError::DelegationExpired);
         }
-        if delegation.used_amount.checked_add(amount).unwrap_or(i128::MAX) > delegation.max_amount {
+        if delegation
+            .used_amount
+            .checked_add(amount)
+            .unwrap_or(i128::MAX)
+            > delegation.max_amount
+        {
             panic_with_error!(&env, FeatureError::DelegationLimitExceeded);
         }
 
@@ -2493,15 +2819,18 @@ impl TipJarContract {
 
         Self::check_and_update_withdrawal_limits(&env, &creator, amount);
 
-        env.storage().persistent().set(&bal_key, &(balance - amount));
+        env.storage()
+            .persistent()
+            .set(&bal_key, &(balance - amount));
         delegation.used_amount += amount;
         if delegation.used_amount >= delegation.max_amount {
             delegation.active = false;
             Self::remove_delegate(&env, &creator, &delegate);
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())), &delegation);
+        env.storage().persistent().set(
+            &DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())),
+            &delegation,
+        );
         Self::append_delegation_history(&env, &creator, &delegation);
 
         token::Client::new(&env, &token).transfer(
@@ -2525,7 +2854,10 @@ impl TipJarContract {
         let mut delegation: Delegation = env
             .storage()
             .persistent()
-            .get(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())))
+            .get(&DataKey::Delegation(DelegationKey::Active(
+                creator.clone(),
+                delegate.clone(),
+            )))
             .unwrap_or_else(|| panic_with_error!(&env, FeatureError::DelegationNotFound));
 
         if !delegation.active {
@@ -2533,27 +2865,24 @@ impl TipJarContract {
         }
 
         delegation.active = false;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())), &delegation);
+        env.storage().persistent().set(
+            &DataKey::Delegation(DelegationKey::Active(creator.clone(), delegate.clone())),
+            &delegation,
+        );
         Self::remove_delegate(&env, &creator, &delegate);
         Self::append_delegation_history(&env, &creator, &delegation);
 
-        env.events().publish(
-            (symbol_short!("del_rev"),),
-            (creator, delegate),
-        );
+        env.events()
+            .publish((symbol_short!("del_rev"),), (creator, delegate));
     }
 
     /// Returns the active delegation record for `creator` and `delegate`.
-    pub fn get_delegation(
-        env: Env,
-        creator: Address,
-        delegate: Address,
-    ) -> Option<Delegation> {
+    pub fn get_delegation(env: Env, creator: Address, delegate: Address) -> Option<Delegation> {
         env.storage()
             .persistent()
-            .get(&DataKey::Delegation(DelegationKey::Active(creator, delegate)))
+            .get(&DataKey::Delegation(DelegationKey::Active(
+                creator, delegate,
+            )))
     }
 
     /// Returns the active delegate addresses for `creator`.
@@ -2568,7 +2897,9 @@ impl TipJarContract {
     pub fn get_delegation_history(env: Env, creator: Address) -> Vec<Delegation> {
         env.storage()
             .persistent()
-            .get(&DataKey::Delegation(DelegationKey::History(creator.clone())))
+            .get(&DataKey::Delegation(DelegationKey::History(
+                creator.clone(),
+            )))
             .unwrap_or_else(|| Vec::new(&env))
     }
 
@@ -2594,7 +2925,10 @@ impl TipJarContract {
             .unwrap_or_else(|| Vec::new(env));
         if !delegates.contains(delegate) {
             delegates.push_back(delegate.clone());
-            env.storage().persistent().set(&DataKey::Delegation(DelegationKey::List(creator.clone())), &delegates);
+            env.storage().persistent().set(
+                &DataKey::Delegation(DelegationKey::List(creator.clone())),
+                &delegates,
+            );
         }
     }
 
@@ -2610,37 +2944,44 @@ impl TipJarContract {
                 remaining.push_back(d);
             }
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegation(DelegationKey::List(creator.clone())), &remaining);
+        env.storage().persistent().set(
+            &DataKey::Delegation(DelegationKey::List(creator.clone())),
+            &remaining,
+        );
     }
 
     fn append_delegation_history(env: &Env, creator: &Address, delegation: &Delegation) {
         let mut history: Vec<Delegation> = env
             .storage()
             .persistent()
-            .get(&DataKey::Delegation(DelegationKey::History(creator.clone())))
+            .get(&DataKey::Delegation(DelegationKey::History(
+                creator.clone(),
+            )))
             .unwrap_or_else(|| Vec::new(env));
         history.push_back(delegation.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Delegation(DelegationKey::History(creator.clone())), &history);
+        env.storage().persistent().set(
+            &DataKey::Delegation(DelegationKey::History(creator.clone())),
+            &history,
+        );
     }
 
     /// Returns the current withdrawable balance for `creator` in `token`.
     pub fn get_withdrawable_balance(env: Env, creator: Address, token: Address) -> i128 {
         let key = DataKey::CreatorBalance(creator.clone(), token.clone());
-        env.storage().persistent().get(&key)
+        env.storage()
+            .persistent()
+            .get(&key)
             .unwrap_or_else(|| env.storage().instance().get(&key).unwrap_or(0))
     }
 
     /// Returns the historical total tips received by `creator` in `token`.
     pub fn get_total_tips(env: Env, creator: Address, token: Address) -> i128 {
         let key = DataKey::CreatorTotal(creator.clone(), token.clone());
-        env.storage().persistent().get(&key)
+        env.storage()
+            .persistent()
+            .get(&key)
             .unwrap_or_else(|| env.storage().instance().get(&key).unwrap_or(0))
     }
-
 
     // ── vesting schedules ────────────────────────────────────────────────────
 
@@ -2688,7 +3029,11 @@ impl TipJarContract {
         }
 
         let now = env.ledger().timestamp();
-        let schedule_id: u64 = env.storage().instance().get(&DataKey::Vesting(VestingKey::Ctr)).unwrap_or(0);
+        let schedule_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vesting(VestingKey::Ctr))
+            .unwrap_or(0);
 
         let schedule = VestingSchedule {
             id: schedule_id,
@@ -2703,30 +3048,43 @@ impl TipJarContract {
             created_at: now,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vesting(VestingKey::Schedule(schedule_id)), &schedule);
-        
+        env.storage().persistent().set(
+            &DataKey::Vesting(VestingKey::Schedule(schedule_id)),
+            &schedule,
+        );
+
         let mut schedules: Vec<u64> = env
             .storage()
             .persistent()
             .get(&DataKey::Vesting(VestingKey::CreatorList(creator.clone())))
             .unwrap_or_else(|| Vec::new(&env));
         schedules.push_back(schedule_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vesting(VestingKey::CreatorList(creator.clone())), &schedules);
+        env.storage().persistent().set(
+            &DataKey::Vesting(VestingKey::CreatorList(creator.clone())),
+            &schedules,
+        );
 
         env.storage()
             .instance()
             .set(&DataKey::Vesting(VestingKey::Ctr), &(schedule_id + 1));
 
         // Transfer tokens into contract for vesting
-        token::Client::new(&env, &token).transfer(&tipper, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(
+            &tipper,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         env.events().publish(
             (symbol_short!("vest_new"),),
-            (creator, tipper, amount, now, vesting_duration, cliff_duration),
+            (
+                creator,
+                tipper,
+                amount,
+                now,
+                vesting_duration,
+                cliff_duration,
+            ),
         );
 
         schedule_id
@@ -2786,11 +3144,7 @@ impl TipJarContract {
     /// Withdraws available vested amounts from a vesting schedule to the creator.
     ///
     /// Emits: `("vest_withdraw",)` with data `(creator, schedule_id, amount, token)`.
-    pub fn withdraw_vested(
-        env: Env,
-        creator: Address,
-        schedule_id: u64,
-    ) -> i128 {
+    pub fn withdraw_vested(env: Env, creator: Address, schedule_id: u64) -> i128 {
         Self::require_not_paused(&env);
         creator.require_auth();
 
@@ -2815,10 +3169,14 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::NoVestedAmount);
         }
 
-        schedule.withdrawn = schedule.withdrawn.checked_add(available).expect("withdrawn overflow");
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vesting(VestingKey::Schedule(schedule_id)), &schedule);
+        schedule.withdrawn = schedule
+            .withdrawn
+            .checked_add(available)
+            .expect("withdrawn overflow");
+        env.storage().persistent().set(
+            &DataKey::Vesting(VestingKey::Schedule(schedule_id)),
+            &schedule,
+        );
 
         let net_amount = Self::process_repayment(&env, &creator, &schedule.token, available);
         token::Client::new(&env, &schedule.token).transfer(
@@ -2888,10 +3246,18 @@ impl TipJarContract {
         let mut entries = Vec::new(&env);
         for addr in participants.iter() {
             let agg_key = match kind {
-                ParticipantKind::Tipper => DataKey::Stats(StatsKey::TipperAgg(addr.clone(), bucket)),
-                ParticipantKind::Creator => DataKey::Stats(StatsKey::CreatorAgg(addr.clone(), bucket)),
+                ParticipantKind::Tipper => {
+                    DataKey::Stats(StatsKey::TipperAgg(addr.clone(), bucket))
+                }
+                ParticipantKind::Creator => {
+                    DataKey::Stats(StatsKey::CreatorAgg(addr.clone(), bucket))
+                }
             };
-            if let Some(entry) = env.storage().persistent().get::<_, LeaderboardEntry>(&agg_key) {
+            if let Some(entry) = env
+                .storage()
+                .persistent()
+                .get::<_, LeaderboardEntry>(&agg_key)
+            {
                 entries.push_back(entry);
             }
         }
@@ -3006,17 +3372,28 @@ impl TipJarContract {
             _ => fees::CongestionLevel::Normal,
         };
         let (fee, fee_bps) = fees::compute_fee(&env, amount, level);
-        
+
         // --- Insurance Premium Calculation ---
-        let ins_enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let ins_enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         let mut ins_premium: i128 = 0;
         if ins_enabled {
-            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg)) {
+            if let Some(config) = env
+                .storage()
+                .instance()
+                .get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg))
+            {
                 ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
             }
         }
 
-        let net = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
+        let net = amount
+            .checked_sub(fee)
+            .and_then(|a| a.checked_sub(ins_premium))
+            .unwrap_or(0);
 
         token::Client::new(&env, &token).transfer(
             &sender,
@@ -3026,19 +3403,19 @@ impl TipJarContract {
 
         if ins_premium > 0 {
             let pool_key = DataKey::Insurance(InsuranceKey::Token(token.clone()));
-            let mut pool: InsurancePool = env
-                .storage()
-                .persistent()
-                .get(&pool_key)
-                .unwrap_or_else(|| InsurancePool {
-                    token: token.clone(),
-                    total_reserves: 0,
-                    total_contributions: 0,
-                    total_claims_paid: 0,
-                    active_claims: 0,
-                    total_claims: 0,
-                    last_payout_time: env.ledger().timestamp(),
-                });
+            let mut pool: InsurancePool =
+                env.storage()
+                    .persistent()
+                    .get(&pool_key)
+                    .unwrap_or_else(|| InsurancePool {
+                        token: token.clone(),
+                        total_reserves: 0,
+                        total_contributions: 0,
+                        total_claims_paid: 0,
+                        active_claims: 0,
+                        total_claims: 0,
+                        last_payout_time: env.ledger().timestamp(),
+                    });
             pool.total_reserves += ins_premium;
             env.storage().persistent().set(&pool_key, &pool);
         }
@@ -3047,13 +3424,13 @@ impl TipJarContract {
         let current_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
         let net_amount = Self::process_repayment(&env, &creator, &token, net);
         let new_bal: i128 = current_bal
-            .checked_add(net_amount).expect("balance overflow");
+            .checked_add(net_amount)
+            .expect("balance overflow");
         env.storage().persistent().set(&bal_key, &new_bal);
 
         let tot_key = DataKey::CreatorTotal(creator.clone(), token.clone());
         let current_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        let new_tot: i128 = current_tot
-            .checked_add(net).expect("total overflow");
+        let new_tot: i128 = current_tot.checked_add(net).expect("total overflow");
         env.storage().persistent().set(&tot_key, &new_tot);
 
         env.events()
@@ -3121,9 +3498,7 @@ impl TipJarContract {
 
     /// Returns the configuration for a tier, or `None` if not configured.
     pub fn get_tier_config(env: Env, tier: SubscriptionTier) -> Option<TierConfig> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::TierConfig(tier))
+        env.storage().persistent().get(&DataKey::TierConfig(tier))
     }
 
     /// Returns the benefits description for a tier, or `None` if not configured.
@@ -3172,9 +3547,10 @@ impl TipJarContract {
             tier: SubscriptionTier::Bronze,
             pending_tier: None,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Subscription(subscriber.clone(), creator.clone()), &sub);
+        env.storage().persistent().set(
+            &DataKey::Subscription(subscriber.clone(), creator.clone()),
+            &sub,
+        );
         env.events().publish(
             (symbol_short!("sub_new"), creator),
             (subscriber, amount, interval_seconds),
@@ -3222,9 +3598,10 @@ impl TipJarContract {
             tier: tier.clone(),
             pending_tier: None,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Subscription(subscriber.clone(), creator.clone()), &sub);
+        env.storage().persistent().set(
+            &DataKey::Subscription(subscriber.clone(), creator.clone()),
+            &sub,
+        );
         env.events().publish(
             (symbol_short!("sub_new"), creator),
             (subscriber, amount, interval_seconds),
@@ -3270,10 +3647,14 @@ impl TipJarContract {
         let bal_key = DataKey::CreatorBalance(creator.clone(), sub.token.clone());
         let bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
         let net_amount = Self::process_repayment(&env, &creator, &sub.token, config.price);
-        env.storage().persistent().set(&bal_key, &(bal + net_amount));
+        env.storage()
+            .persistent()
+            .set(&bal_key, &(bal + net_amount));
         let tot_key = DataKey::CreatorTotal(creator.clone(), sub.token.clone());
         let tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        env.storage().persistent().set(&tot_key, &(tot + config.price));
+        env.storage()
+            .persistent()
+            .set(&tot_key, &(tot + config.price));
 
         let now = env.ledger().timestamp();
         sub.tier = new_tier;
@@ -3371,11 +3752,15 @@ impl TipJarContract {
         let bal_key = DataKey::CreatorBalance(creator.clone(), sub.token.clone());
         let bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
         let net_amount = Self::process_repayment(&env, &creator, &sub.token, sub.amount);
-        env.storage().persistent().set(&bal_key, &(bal + net_amount));
+        env.storage()
+            .persistent()
+            .set(&bal_key, &(bal + net_amount));
 
         let tot_key = DataKey::CreatorTotal(creator.clone(), sub.token.clone());
         let tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        env.storage().persistent().set(&tot_key, &(tot + sub.amount));
+        env.storage()
+            .persistent()
+            .set(&tot_key, &(tot + sub.amount));
 
         sub.last_payment = now;
         sub.next_payment = now + sub.interval_seconds;
@@ -3518,38 +3903,48 @@ impl TipJarContract {
         let fee: i128 = (amount * fee_bp as i128) / 10_000;
 
         // --- Insurance Premium Calculation ---
-        let ins_enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let ins_enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         let mut ins_premium: i128 = 0;
         if ins_enabled {
-            if let Some(config) = env.storage().instance().get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg)) {
+            if let Some(config) = env
+                .storage()
+                .instance()
+                .get::<DataKey, InsurancePoolConfig>(&DataKey::Insurance(InsuranceKey::Cfg))
+            {
                 ins_premium = (amount * config.tip_premium_bps as i128) / 10_000;
             }
         }
 
-        let creator_amount = amount.checked_sub(fee).and_then(|a| a.checked_sub(ins_premium)).unwrap_or(0);
+        let creator_amount = amount
+            .checked_sub(fee)
+            .and_then(|a| a.checked_sub(ins_premium))
+            .unwrap_or(0);
 
         if fee > 0 {
             let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
-            let new_fee_bal: i128 =
-                env.storage().instance().get(&fee_key).unwrap_or(0) + fee;
+            let new_fee_bal: i128 = env.storage().instance().get(&fee_key).unwrap_or(0) + fee;
             env.storage().instance().set(&fee_key, &new_fee_bal);
         }
 
         if ins_premium > 0 {
             let pool_key = DataKey::Insurance(InsuranceKey::Token(token.clone()));
-            let mut pool: InsurancePool = env
-                .storage()
-                .persistent()
-                .get(&pool_key)
-                .unwrap_or_else(|| InsurancePool {
-                    token: token.clone(),
-                    total_reserves: 0,
-                    total_contributions: 0,
-                    total_claims_paid: 0,
-                    active_claims: 0,
-                    total_claims: 0,
-                    last_payout_time: env.ledger().timestamp(),
-                });
+            let mut pool: InsurancePool =
+                env.storage()
+                    .persistent()
+                    .get(&pool_key)
+                    .unwrap_or_else(|| InsurancePool {
+                        token: token.clone(),
+                        total_reserves: 0,
+                        total_contributions: 0,
+                        total_claims_paid: 0,
+                        active_claims: 0,
+                        total_claims: 0,
+                        last_payout_time: env.ledger().timestamp(),
+                    });
             pool.total_reserves += ins_premium;
             env.storage().persistent().set(&pool_key, &pool);
         }
@@ -3579,11 +3974,7 @@ impl TipJarContract {
 
         // Store metadata and increment tip count.
         let count_key = DataKey::Tip(TipKey::Count(creator.clone()));
-        let tip_index: u64 = env
-            .storage()
-            .persistent()
-            .get(&count_key)
-            .unwrap_or(0u64);
+        let tip_index: u64 = env.storage().persistent().get(&count_key).unwrap_or(0u64);
 
         let timestamp = env.ledger().timestamp();
         let metadata = TipMetadata {
@@ -3592,12 +3983,11 @@ impl TipJarContract {
             message: message.clone(),
             timestamp,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Tip(TipKey::History(creator.clone(), tip_index)), &metadata);
-        env.storage()
-            .persistent()
-            .set(&count_key, &(tip_index + 1));
+        env.storage().persistent().set(
+            &DataKey::Tip(TipKey::History(creator.clone(), tip_index)),
+            &metadata,
+        );
+        env.storage().persistent().set(&count_key, &(tip_index + 1));
 
         env.events().publish(
             (symbol_short!("tip_msg"), creator.clone()),
@@ -3612,11 +4002,7 @@ impl TipJarContract {
     /// `limit` is capped at 100 to bound storage reads.
     pub fn get_tip_history(env: Env, creator: Address, limit: u32) -> Vec<TipMetadata> {
         let count_key = DataKey::Tip(TipKey::Count(creator.clone()));
-        let total: u64 = env
-            .storage()
-            .persistent()
-            .get(&count_key)
-            .unwrap_or(0u64);
+        let total: u64 = env.storage().persistent().get(&count_key).unwrap_or(0u64);
 
         let cap = if limit > 100 { 100 } else { limit } as u64;
         let mut result = Vec::new(&env);
@@ -3706,7 +4092,9 @@ impl TipJarContract {
             let bal_key = DataKey::CreatorBalance(r.creator.clone(), token.clone());
             let bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
             let net_amount = Self::process_repayment(&env, &r.creator, &token, share);
-            env.storage().persistent().set(&bal_key, &(bal + net_amount));
+            env.storage()
+                .persistent()
+                .set(&bal_key, &(bal + net_amount));
 
             let tot_key = DataKey::CreatorTotal(r.creator.clone(), token.clone());
             let tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
@@ -3730,7 +4118,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().persistent().set(&DataKey::Role(RoleKey::User(user.clone())), &role);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Role(RoleKey::User(user.clone())), &role);
         let mut members: Vec<Address> = env
             .storage()
             .persistent()
@@ -3738,9 +4128,12 @@ impl TipJarContract {
             .unwrap_or_else(|| Vec::new(&env));
         if !members.contains(&user) {
             members.push_back(user.clone());
-            env.storage().persistent().set(&DataKey::Role(RoleKey::Members(role.clone())), &members);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Role(RoleKey::Members(role.clone())), &members);
         }
-        env.events().publish((symbol_short!("role_grt"),), (user, role));
+        env.events()
+            .publish((symbol_short!("role_grt"),), (user, role));
     }
 
     /// Revokes any role from `user`. Caller must be the stored admin.
@@ -3755,15 +4148,20 @@ impl TipJarContract {
             .persistent()
             .get::<DataKey, Role>(&DataKey::Role(RoleKey::User(user.clone())))
         {
-            env.storage().persistent().remove(&DataKey::Role(RoleKey::User(user.clone())));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Role(RoleKey::User(user.clone())));
             let mut members: Vec<Address> = env
                 .storage()
                 .persistent()
                 .get(&DataKey::Role(RoleKey::Members(role.clone())))
                 .unwrap_or_else(|| Vec::new(&env));
             members.retain(|a| a != user);
-            env.storage().persistent().set(&DataKey::Role(RoleKey::Members(role.clone())), &members);
-            env.events().publish((symbol_short!("role_rev"),), (user, role));
+            env.storage()
+                .persistent()
+                .set(&DataKey::Role(RoleKey::Members(role.clone())), &members);
+            env.events()
+                .publish((symbol_short!("role_rev"),), (user, role));
         }
     }
 
@@ -3843,8 +4241,12 @@ impl TipJarContract {
             expires_at: created_at.saturating_add(refund_window),
             cancelled: false,
         };
-        env.storage().persistent().set(&DataKey::TimeLock(lock_id), &time_lock);
-        env.storage().persistent().set(&DataKey::NextLockId, &(lock_id + 1));
+        env.storage()
+            .persistent()
+            .set(&DataKey::TimeLock(lock_id), &time_lock);
+        env.storage()
+            .persistent()
+            .set(&DataKey::NextLockId, &(lock_id + 1));
 
         let mut creator_locks: Vec<u64> = env
             .storage()
@@ -3852,12 +4254,18 @@ impl TipJarContract {
             .get(&DataKey::CreatorLocks(creator.clone()))
             .unwrap_or_else(|| Vec::new(&env));
         creator_locks.push_back(lock_id);
-        env.storage().persistent().set(&DataKey::CreatorLocks(creator.clone()), &creator_locks);
+        env.storage()
+            .persistent()
+            .set(&DataKey::CreatorLocks(creator.clone()), &creator_locks);
 
         Self::add_active_time_lock(&env, lock_id);
 
         // External call last.
-        token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(
+            &sender,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         env.events().publish(
             (symbol_short!("lock"), creator),
@@ -3902,7 +4310,9 @@ impl TipJarContract {
         }
 
         // State update before external call (CEI).
-        env.storage().persistent().remove(&DataKey::TimeLock(lock_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::TimeLock(lock_id));
         Self::remove_active_time_lock(&env, lock_id);
 
         token::Client::new(&env, &token).transfer(
@@ -3944,7 +4354,9 @@ impl TipJarContract {
 
         // State update before external call (CEI).
         time_lock.cancelled = true;
-        env.storage().persistent().set(&DataKey::TimeLock(lock_id), &time_lock);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TimeLock(lock_id), &time_lock);
         Self::remove_active_time_lock(&env, lock_id);
 
         token::Client::new(&env, &token).transfer(
@@ -4024,7 +4436,8 @@ impl TipJarContract {
         env.storage()
             .instance()
             .set(&DataKey::RefundWindow, &refund_window_seconds);
-        env.events().publish((symbol_short!("ref_wind"),), refund_window_seconds);
+        env.events()
+            .publish((symbol_short!("ref_wind"),), refund_window_seconds);
     }
 
     /// Returns all expired time-locked tips whose refund window has passed.
@@ -4102,7 +4515,9 @@ impl TipJarContract {
         if !active.contains(&lock_id) {
             active.push_back(lock_id);
         }
-        env.storage().persistent().set(&DataKey::ActiveTimeLocks, &active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveTimeLocks, &active);
     }
 
     fn remove_active_time_lock(env: &Env, lock_id: u64) {
@@ -4117,11 +4532,15 @@ impl TipJarContract {
                 remaining.push_back(id);
             }
         }
-        env.storage().persistent().set(&DataKey::ActiveTimeLocks, &remaining);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveTimeLocks, &remaining);
     }
 
     fn refund_time_lock(env: &Env, lock_id: u64, time_lock: &TimeLock) {
-        env.storage().persistent().remove(&DataKey::TimeLock(lock_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::TimeLock(lock_id));
         Self::remove_active_time_lock(env, lock_id);
         token::Client::new(&env, &time_lock.token).transfer(
             &env.current_contract_address(),
@@ -4130,7 +4549,12 @@ impl TipJarContract {
         );
         env.events().publish(
             (symbol_short!("tip_exp"), time_lock.creator.clone()),
-            (time_lock.sender.clone(), time_lock.amount, time_lock.expires_at, lock_id),
+            (
+                time_lock.sender.clone(),
+                time_lock.amount,
+                time_lock.expires_at,
+                lock_id,
+            ),
         );
     }
 
@@ -4147,7 +4571,11 @@ impl TipJarContract {
             .storage()
             .persistent()
             .get(&DataKey::Limit(LimitKey::Withdrawal(creator.clone())))
-            .or_else(|| env.storage().instance().get(&DataKey::Limit(LimitKey::Default)))
+            .or_else(|| {
+                env.storage()
+                    .instance()
+                    .get(&DataKey::Limit(LimitKey::Default))
+            })
             .unwrap_or(WithdrawalLimits {
                 daily_limit: 0,
                 cooldown_seconds: 0,
@@ -4180,9 +4608,10 @@ impl TipJarContract {
 
         limits.withdrawn_today += amount;
         limits.last_withdrawal = now;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Limit(LimitKey::Withdrawal(creator.clone())), &limits);
+        env.storage().persistent().set(
+            &DataKey::Limit(LimitKey::Withdrawal(creator.clone())),
+            &limits,
+        );
     }
 
     /// Sets per-creator withdrawal limits. Admin only.
@@ -4221,9 +4650,10 @@ impl TipJarContract {
             withdrawn_today: existing.withdrawn_today,
             day_start: existing.day_start,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Limit(LimitKey::Withdrawal(creator.clone())), &limits);
+        env.storage().persistent().set(
+            &DataKey::Limit(LimitKey::Withdrawal(creator.clone())),
+            &limits,
+        );
 
         env.events().publish(
             (symbol_short!("wl_set"), creator),
@@ -4297,7 +4727,11 @@ impl TipJarContract {
         env.storage()
             .persistent()
             .get(&DataKey::Limit(LimitKey::Withdrawal(creator)))
-            .or_else(|| env.storage().instance().get(&DataKey::Limit(LimitKey::Default)))
+            .or_else(|| {
+                env.storage()
+                    .instance()
+                    .get(&DataKey::Limit(LimitKey::Default))
+            })
             .unwrap_or(WithdrawalLimits {
                 daily_limit: 0,
                 cooldown_seconds: 0,
@@ -4329,8 +4763,15 @@ impl TipJarContract {
         if required_approvals == 0 || required_approvals as u32 > signers.len() {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        let cfg = MultiSigConfig { threshold, required_approvals, expiry_seconds, signers };
-        env.storage().instance().set(&DataKey::MultiSig(MultiSigKey::Config), &cfg);
+        let cfg = MultiSigConfig {
+            threshold,
+            required_approvals,
+            expiry_seconds,
+            signers,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::MultiSig(MultiSigKey::Config), &cfg);
         env.events().publish(
             (symbol_short!("ms_cfg"),),
             (threshold, required_approvals, expiry_seconds),
@@ -4368,7 +4809,9 @@ impl TipJarContract {
         // Below-or-at threshold: process immediately.
         if cfg.threshold > 0 && amount <= cfg.threshold {
             Self::check_and_update_withdrawal_limits(&env, &creator, amount);
-            env.storage().persistent().set(&bal_key, &(balance - amount));
+            env.storage()
+                .persistent()
+                .set(&bal_key, &(balance - amount));
             token::Client::new(&env, &token).transfer(
                 &env.current_contract_address(),
                 &creator,
@@ -4384,7 +4827,9 @@ impl TipJarContract {
             .instance()
             .get(&DataKey::MultiSig(MultiSigKey::Ctr))
             .unwrap_or(0);
-        env.storage().instance().set(&DataKey::MultiSig(MultiSigKey::Ctr), &(request_id + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::MultiSig(MultiSigKey::Ctr), &(request_id + 1));
 
         let expires_at = env.ledger().timestamp() + cfg.expiry_seconds;
         let request = MultiSigWithdrawal {
@@ -4398,7 +4843,10 @@ impl TipJarContract {
             executed: false,
             cancelled: false,
         };
-        env.storage().persistent().set(&DataKey::MultiSig(MultiSigKey::Request(request_id)), &request);
+        env.storage().persistent().set(
+            &DataKey::MultiSig(MultiSigKey::Request(request_id)),
+            &request,
+        );
 
         env.events().publish(
             (symbol_short!("ms_req"), creator),
@@ -4443,7 +4891,8 @@ impl TipJarContract {
         }
 
         request.approvals.push_back(approver.clone());
-        env.events().publish((symbol_short!("ms_apr"), approver), request_id);
+        env.events()
+            .publish((symbol_short!("ms_apr"), approver), request_id);
 
         if request.approvals.len() >= request.required_approvals {
             // Execute withdrawal.
@@ -4452,9 +4901,14 @@ impl TipJarContract {
             if balance < request.amount {
                 panic_with_error!(&env, TipJarError::InsufficientBalance);
             }
-            env.storage().persistent().set(&bal_key, &(balance - request.amount));
+            env.storage()
+                .persistent()
+                .set(&bal_key, &(balance - request.amount));
             request.executed = true;
-            env.storage().persistent().set(&DataKey::MultiSig(MultiSigKey::Request(request_id)), &request);
+            env.storage().persistent().set(
+                &DataKey::MultiSig(MultiSigKey::Request(request_id)),
+                &request,
+            );
 
             token::Client::new(&env, &request.token).transfer(
                 &env.current_contract_address(),
@@ -4466,7 +4920,10 @@ impl TipJarContract {
                 (request_id, request.amount),
             );
         } else {
-            env.storage().persistent().set(&DataKey::MultiSig(MultiSigKey::Request(request_id)), &request);
+            env.storage().persistent().set(
+                &DataKey::MultiSig(MultiSigKey::Request(request_id)),
+                &request,
+            );
         }
     }
 
@@ -4493,8 +4950,12 @@ impl TipJarContract {
         }
 
         request.cancelled = true;
-        env.storage().persistent().set(&DataKey::MultiSig(MultiSigKey::Request(request_id)), &request);
-        env.events().publish((symbol_short!("ms_cncl"), request.creator), request_id);
+        env.storage().persistent().set(
+            &DataKey::MultiSig(MultiSigKey::Request(request_id)),
+            &request,
+        );
+        env.events()
+            .publish((symbol_short!("ms_cncl"), request.creator), request_id);
     }
 
     /// Returns a multi-sig withdrawal request by ID.
@@ -4536,17 +4997,18 @@ impl TipJarContract {
     /// Creates a dispute for a tip. Only the tipper or creator can initiate.
     ///
     /// Emits `("dispute_created",)` with data `(dispute_id, tip_id, initiator)`.
-    pub fn create_dispute(
-        env: Env,
-        tip_id: u64,
-        initiator: Address,
-        reason: String,
-    ) -> u64 {
+    pub fn create_dispute(env: Env, tip_id: u64, initiator: Address, reason: String) -> u64 {
         Self::require_not_paused(&env);
         initiator.require_auth();
 
-        let dispute_id: u64 = env.storage().instance().get(&DataKey::Dispute(DisputeKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Dispute(DisputeKey::Ctr), &(dispute_id + 1));
+        let dispute_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Dispute(DisputeKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Dispute(DisputeKey::Ctr), &(dispute_id + 1));
 
         let created_at = env.ledger().timestamp();
         let dispute = dispute::Dispute {
@@ -4560,17 +5022,22 @@ impl TipJarContract {
             created_at,
         };
 
-        env.storage().persistent().set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
 
         let mut creator_disputes: Vec<u64> = env
             .storage()
             .persistent()
-            .get(&DataKey::Dispute(DisputeKey::CreatorList(initiator.clone())))
+            .get(&DataKey::Dispute(DisputeKey::CreatorList(
+                initiator.clone(),
+            )))
             .unwrap_or_else(|| Vec::new(&env));
         creator_disputes.push_back(dispute_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Dispute(DisputeKey::CreatorList(initiator.clone())), &creator_disputes);
+        env.storage().persistent().set(
+            &DataKey::Dispute(DisputeKey::CreatorList(initiator.clone())),
+            &creator_disputes,
+        );
 
         env.events().publish(
             (symbol_short!("disp_crt"),),
@@ -4598,23 +5065,18 @@ impl TipJarContract {
 
         dispute.arbitrator = Some(arbitrator.clone());
         dispute.status = dispute::DisputeStatus::UnderReview;
-        env.storage().persistent().set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
 
-        env.events().publish(
-            (symbol_short!("disp_asgn"),),
-            (dispute_id, arbitrator),
-        );
+        env.events()
+            .publish((symbol_short!("disp_asgn"),), (dispute_id, arbitrator));
     }
 
     /// Submits evidence for a dispute.
     ///
     /// Emits `("evidence_submitted",)` with data `(dispute_id, submitter)`.
-    pub fn submit_evidence(
-        env: Env,
-        dispute_id: u64,
-        submitter: Address,
-        evidence: String,
-    ) {
+    pub fn submit_evidence(env: Env, dispute_id: u64, submitter: Address, evidence: String) {
         Self::require_not_paused(&env);
         submitter.require_auth();
 
@@ -4624,7 +5086,9 @@ impl TipJarContract {
             .get(&DataKey::Dispute(DisputeKey::Record(dispute_id)))
             .unwrap_or_else(|| panic_with_error!(&env, FeatureError::DisputeNotFound));
 
-        if dispute.status != dispute::DisputeStatus::Open && dispute.status != dispute::DisputeStatus::UnderReview {
+        if dispute.status != dispute::DisputeStatus::Open
+            && dispute.status != dispute::DisputeStatus::UnderReview
+        {
             panic_with_error!(&env, FeatureError::DisputeNotOpen);
         }
 
@@ -4642,17 +5106,17 @@ impl TipJarContract {
             submitted_at,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Dispute(DisputeKey::Evidence(dispute_id, evidence_idx)), &evidence_record);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Dispute(DisputeKey::EvidenceCtr(dispute_id)), &(evidence_idx + 1));
-
-        env.events().publish(
-            (symbol_short!("evid_sub"),),
-            (dispute_id, submitter),
+        env.storage().persistent().set(
+            &DataKey::Dispute(DisputeKey::Evidence(dispute_id, evidence_idx)),
+            &evidence_record,
         );
+        env.storage().persistent().set(
+            &DataKey::Dispute(DisputeKey::EvidenceCtr(dispute_id)),
+            &(evidence_idx + 1),
+        );
+
+        env.events()
+            .publish((symbol_short!("evid_sub"),), (dispute_id, submitter));
     }
 
     /// Resolves a dispute. Only the arbitrator can resolve.
@@ -4685,12 +5149,12 @@ impl TipJarContract {
             dispute::DisputeStatus::Rejected
         };
 
-        env.storage().persistent().set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(DisputeKey::Record(dispute_id)), &dispute);
 
-        env.events().publish(
-            (symbol_short!("disp_res"),),
-            (dispute_id, resolution),
-        );
+        env.events()
+            .publish((symbol_short!("disp_res"),), (dispute_id, resolution));
     }
 
     /// Returns a dispute by ID.
@@ -4710,10 +5174,17 @@ impl TipJarContract {
     }
 
     /// Returns evidence for a dispute.
-    pub fn get_dispute_evidence(env: Env, dispute_id: u64, evidence_idx: u64) -> dispute::DisputeEvidence {
+    pub fn get_dispute_evidence(
+        env: Env,
+        dispute_id: u64,
+        evidence_idx: u64,
+    ) -> dispute::DisputeEvidence {
         env.storage()
             .persistent()
-            .get(&DataKey::Dispute(DisputeKey::Evidence(dispute_id, evidence_idx)))
+            .get(&DataKey::Dispute(DisputeKey::Evidence(
+                dispute_id,
+                evidence_idx,
+            )))
             .unwrap_or_else(|| panic_with_error!(&env, FeatureError::DisputeNotFound))
     }
 
@@ -4723,12 +5194,7 @@ impl TipJarContract {
     ///
     /// `tips` is a vector of (creator, amount) pairs. Returns the number of successful tips.
     /// Emits `("batch_tip",)` with data `(tipper, count, total_amount)`.
-    pub fn batch_tip(
-        env: Env,
-        tipper: Address,
-        token: Address,
-        tips: Vec<BatchTip>,
-    ) -> u32 {
+    pub fn batch_tip(env: Env, tipper: Address, token: Address, tips: Vec<BatchTip>) -> u32 {
         Self::require_not_paused(&env);
         tipper.require_auth();
 
@@ -4750,15 +5216,25 @@ impl TipJarContract {
             if tip.amount <= 0 {
                 panic_with_error!(&env, TipJarError::InvalidAmount);
             }
-            total_amount = total_amount.checked_add(tip.amount).expect("total overflow");
+            total_amount = total_amount
+                .checked_add(tip.amount)
+                .expect("total overflow");
         }
 
         Self::check_circuit_breaker(&env, total_amount);
 
         // Transfer all tokens at once
-        token::Client::new(&env, &token).transfer(&tipper, &env.current_contract_address(), &total_amount);
+        token::Client::new(&env, &token).transfer(
+            &tipper,
+            &env.current_contract_address(),
+            &total_amount,
+        );
 
-        let fee_bp: u32 = env.storage().instance().get(&DataKey::Fee(FeeKey::BasisPoints)).unwrap_or(0);
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Fee(FeeKey::BasisPoints))
+            .unwrap_or(0);
         let mut successful_tips: u32 = 0;
 
         for tip in tips.iter() {
@@ -4780,12 +5256,16 @@ impl TipJarContract {
             let bal_key = DataKey::CreatorBalance(tip.creator.clone(), token.clone());
             let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
             let net_amount = Self::process_repayment(&env, &tip.creator, &token, creator_amount);
-            let new_bal: i128 = existing_bal.checked_add(net_amount).expect("balance overflow");
+            let new_bal: i128 = existing_bal
+                .checked_add(net_amount)
+                .expect("balance overflow");
             env.storage().persistent().set(&bal_key, &new_bal);
 
             let tot_key = DataKey::CreatorTotal(tip.creator.clone(), token.clone());
             let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-            let new_tot: i128 = existing_tot.checked_add(creator_amount).expect("total overflow");
+            let new_tot: i128 = existing_tot
+                .checked_add(creator_amount)
+                .expect("total overflow");
             env.storage().persistent().set(&tot_key, &new_tot);
 
             Self::update_leaderboard_stats(&env, &tipper, &tip.creator, creator_amount);
@@ -4861,11 +5341,7 @@ impl TipJarContract {
         let contract_address = env.current_contract_address();
 
         for (index, op) in operations.iter().enumerate() {
-            token::Client::new(&env, &op.token).transfer(
-                &contract_address,
-                &creator,
-                &op.amount,
-            );
+            token::Client::new(&env, &op.token).transfer(&contract_address, &creator, &op.amount);
 
             env.events().publish(
                 (symbol_short!("btch_wdr"),),
@@ -4878,10 +5354,8 @@ impl TipJarContract {
             });
         }
 
-        env.events().publish(
-            (symbol_short!("batch_wdr"),),
-            (creator.clone(), op_count),
-        );
+        env.events()
+            .publish((symbol_short!("batch_wdr"),), (creator.clone(), op_count));
 
         results
     }
@@ -4969,21 +5443,33 @@ impl TipJarContract {
 
             let bal_key = DataKey::CreatorBalance(op.creator.clone(), op.token.clone());
             let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&bal_key, &existing_bal.checked_add(creator_amount).expect("balance overflow"));
+            env.storage().persistent().set(
+                &bal_key,
+                &existing_bal
+                    .checked_add(creator_amount)
+                    .expect("balance overflow"),
+            );
 
             let tot_key = DataKey::CreatorTotal(op.creator.clone(), op.token.clone());
             let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-            env.storage()
-                .persistent()
-                .set(&tot_key, &existing_tot.checked_add(creator_amount).expect("total overflow"));
+            env.storage().persistent().set(
+                &tot_key,
+                &existing_tot
+                    .checked_add(creator_amount)
+                    .expect("total overflow"),
+            );
 
             Self::update_leaderboard_stats(&env, &tipper, &op.creator, creator_amount);
 
             env.events().publish(
                 (symbol_short!("btp_op"),),
-                (tipper.clone(), op.creator.clone(), op.token.clone(), creator_amount, index as u32),
+                (
+                    tipper.clone(),
+                    op.creator.clone(),
+                    op.token.clone(),
+                    creator_amount,
+                    index as u32,
+                ),
             );
 
             results.push_back(BatchResult {
@@ -4991,7 +5477,9 @@ impl TipJarContract {
                 index: index as u32,
             });
 
-            grand_total = grand_total.checked_add(op.amount).expect("grand total overflow");
+            grand_total = grand_total
+                .checked_add(op.amount)
+                .expect("grand total overflow");
         }
 
         env.events().publish(
@@ -5000,6 +5488,147 @@ impl TipJarContract {
         );
 
         results
+    }
+
+    /// Sends multiple tips in a single transaction with partial failure handling.
+    ///
+    /// Unlike `batch_tip_v2`, invalid operations (zero/negative amount, unwhitelisted
+    /// token) are **skipped** rather than causing the entire batch to revert.
+    /// Each operation is transferred individually so only valid ops consume tokens.
+    ///
+    /// Batch size is capped at 20. Returns per-operation results indicating success
+    /// or skip. Updates cumulative `BatchStats` stored under `symbol_short!("bt_stats")`.
+    ///
+    /// Emits `("btp_multi",)` with data `(tipper, success_count, skipped_count, total_amount)`.
+    pub fn batch_tip_multi(
+        env: Env,
+        tipper: Address,
+        operations: Vec<TipOperation>,
+    ) -> Vec<BatchResult> {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        const MAX_BATCH_SIZE: u32 = 20;
+        let op_count = operations.len();
+
+        if op_count == 0 || op_count > MAX_BATCH_SIZE {
+            panic_with_error!(&env, TipJarError::BatchSizeExceeded);
+        }
+
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBasisPoints)
+            .unwrap_or(0);
+
+        let contract_address = env.current_contract_address();
+        let mut results: Vec<BatchResult> = Vec::new(&env);
+        let mut success_count: u64 = 0;
+        let mut skipped_count: u64 = 0;
+        let mut grand_total: i128 = 0;
+
+        for (index, op) in operations.iter().enumerate() {
+            let idx = index as u32;
+
+            // Validate — skip instead of panic.
+            if op.amount <= 0 {
+                results.push_back(BatchResult { success: false, index: idx });
+                skipped_count += 1;
+                continue;
+            }
+            let whitelisted: bool = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenWhitelist(op.token.clone()))
+                .unwrap_or(false);
+            if !whitelisted {
+                results.push_back(BatchResult { success: false, index: idx });
+                skipped_count += 1;
+                continue;
+            }
+
+            // Transfer this op's tokens individually (CEI: transfer before state update).
+            token::Client::new(&env, &op.token).transfer(
+                &tipper,
+                &contract_address,
+                &op.amount,
+            );
+
+            let fee: i128 = (op.amount * fee_bp as i128) / 10_000;
+            let creator_amount = op.amount - fee;
+
+            if fee > 0 {
+                let fee_key = DataKey::PlatformFeeBalance(op.token.clone());
+                let new_fee: i128 = env
+                    .storage()
+                    .instance()
+                    .get(&fee_key)
+                    .unwrap_or(0i128)
+                    .saturating_add(fee);
+                env.storage().instance().set(&fee_key, &new_fee);
+            }
+
+            let bal_key = DataKey::CreatorBalance(op.creator.clone(), op.token.clone());
+            let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&bal_key, &existing_bal.saturating_add(creator_amount));
+
+            let tot_key = DataKey::CreatorTotal(op.creator.clone(), op.token.clone());
+            let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&tot_key, &existing_tot.saturating_add(creator_amount));
+
+            Self::update_leaderboard_stats(&env, &tipper, &op.creator, creator_amount);
+
+            env.events().publish(
+                (symbol_short!("btp_mop"),),
+                (tipper.clone(), op.creator.clone(), op.token.clone(), creator_amount, idx),
+            );
+
+            results.push_back(BatchResult { success: true, index: idx });
+            success_count += 1;
+            grand_total = grand_total.saturating_add(op.amount);
+        }
+
+        // Update cumulative batch stats.
+        let stats_key = symbol_short!("bt_stats");
+        let mut stats: BatchStats = env
+            .storage()
+            .instance()
+            .get(&stats_key)
+            .unwrap_or(BatchStats {
+                total_batches: 0,
+                total_tips: 0,
+                total_amount: 0,
+                total_skipped: 0,
+            });
+        stats.total_batches += 1;
+        stats.total_tips += success_count;
+        stats.total_amount = stats.total_amount.saturating_add(grand_total);
+        stats.total_skipped += skipped_count;
+        env.storage().instance().set(&stats_key, &stats);
+
+        env.events().publish(
+            (symbol_short!("btp_multi"),),
+            (tipper, success_count as u32, skipped_count as u32, grand_total),
+        );
+
+        results
+    }
+
+    /// Returns the cumulative batch processing statistics.
+    pub fn get_batch_stats(env: Env) -> BatchStats {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("bt_stats"))
+            .unwrap_or(BatchStats {
+                total_batches: 0,
+                total_tips: 0,
+                total_amount: 0,
+                total_skipped: 0,
+            })
     }
 
     // ── liquidity mining ──────────────────────────────────────────────────────
@@ -5043,12 +5672,7 @@ impl TipJarContract {
     /// Stakes `amount` LP tokens into a liquidity mining program.
     ///
     /// Emits `("lm_stake",)` with `(provider, program_id, amount, new_total_staked)`.
-    pub fn lm_stake(
-        env: Env,
-        provider: Address,
-        program_id: u64,
-        amount: i128,
-    ) {
+    pub fn lm_stake(env: Env, provider: Address, program_id: u64, amount: i128) {
         Self::require_not_paused(&env);
         liquidity_mining::stake(&env, &provider, program_id, amount);
     }
@@ -5057,12 +5681,7 @@ impl TipJarContract {
     ///
     /// Accrues pending rewards before reducing the position.
     /// Emits `("lm_unstk",)` with `(provider, program_id, amount, remaining_staked)`.
-    pub fn lm_unstake(
-        env: Env,
-        provider: Address,
-        program_id: u64,
-        amount: i128,
-    ) {
+    pub fn lm_unstake(env: Env, provider: Address, program_id: u64, amount: i128) {
         Self::require_not_paused(&env);
         liquidity_mining::unstake(&env, &provider, program_id, amount);
     }
@@ -5070,11 +5689,7 @@ impl TipJarContract {
     /// Claims all vested mining rewards for a provider. Returns the amount claimed.
     ///
     /// Emits `("lm_claim",)` with `(provider, program_id, amount_claimed)`.
-    pub fn lm_claim_rewards(
-        env: Env,
-        provider: Address,
-        program_id: u64,
-    ) -> i128 {
+    pub fn lm_claim_rewards(env: Env, provider: Address, program_id: u64) -> i128 {
         Self::require_not_paused(&env);
         liquidity_mining::claim_rewards(&env, &provider, program_id)
     }
@@ -5084,12 +5699,7 @@ impl TipJarContract {
     /// Boost scales linearly from 1× (no lock) to 3× (lock = 1 year).
     /// Only increasing boosts are accepted.
     /// Emits `("lm_boost",)` with `(provider, program_id, new_boost, lock_until)`.
-    pub fn lm_apply_boost(
-        env: Env,
-        provider: Address,
-        program_id: u64,
-        lock_duration: u64,
-    ) {
+    pub fn lm_apply_boost(env: Env, provider: Address, program_id: u64, lock_duration: u64) {
         Self::require_not_paused(&env);
         liquidity_mining::apply_boost(&env, &provider, program_id, lock_duration);
     }
@@ -5350,12 +5960,7 @@ impl TipJarContract {
     /// Checks and awards milestones when a creator reaches specific tip thresholds.
     ///
     /// Called internally after tips are processed. Emits milestone events.
-    fn check_and_award_milestones(
-        env: &Env,
-        creator: &Address,
-        token: &Address,
-        new_total: i128,
-    ) {
+    fn check_and_award_milestones(env: &Env, creator: &Address, token: &Address, new_total: i128) {
         let milestones = Self::get_creator_milestones(env, creator);
 
         for (idx, milestone) in milestones.iter().enumerate() {
@@ -5369,9 +5974,10 @@ impl TipJarContract {
 
                 let mut updated_milestone = milestone.clone();
                 updated_milestone.completed = true;
-                env.storage()
-                    .persistent()
-                    .set(&DataKey::Milestone(MilestoneKey::Record(creator.clone(), idx as u64)), &updated_milestone);
+                env.storage().persistent().set(
+                    &DataKey::Milestone(MilestoneKey::Record(creator.clone(), idx as u64)),
+                    &updated_milestone,
+                );
 
                 env.events().publish(
                     (symbol_short!("milestone"),),
@@ -5414,9 +6020,10 @@ impl TipJarContract {
             completed: false,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Milestone(MilestoneKey::Record(creator.clone(), milestone_id)), &milestone);
+        env.storage().persistent().set(
+            &DataKey::Milestone(MilestoneKey::Record(creator.clone(), milestone_id)),
+            &milestone,
+        );
         env.storage()
             .persistent()
             .set(&counter_key, &(milestone_id + 1));
@@ -5427,14 +6034,13 @@ impl TipJarContract {
             .get(&DataKey::Milestone(MilestoneKey::Active(creator.clone())))
             .unwrap_or_else(|| Vec::new(&env));
         active.push_back(milestone_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Milestone(MilestoneKey::Active(creator.clone())), &active);
-
-        env.events().publish(
-            (symbol_short!("ms_crt"),),
-            (creator, goal_amount),
+        env.storage().persistent().set(
+            &DataKey::Milestone(MilestoneKey::Active(creator.clone())),
+            &active,
         );
+
+        env.events()
+            .publish((symbol_short!("ms_crt"),), (creator, goal_amount));
 
         milestone_id
     }
@@ -5449,10 +6055,13 @@ impl TipJarContract {
 
         let mut milestones = Vec::new(&env);
         for id in milestone_ids.iter() {
-            if let Some(milestone) = env
-                .storage()
-                .persistent()
-                .get::<_, Milestone>(&DataKey::Milestone(MilestoneKey::Record(creator.clone(), id)))
+            if let Some(milestone) =
+                env.storage()
+                    .persistent()
+                    .get::<_, Milestone>(&DataKey::Milestone(MilestoneKey::Record(
+                        creator.clone(),
+                        id,
+                    )))
             {
                 milestones.push_back(milestone);
             }
@@ -5464,7 +6073,10 @@ impl TipJarContract {
     pub fn get_milestone(env: Env, creator: Address, milestone_id: u64) -> Milestone {
         env.storage()
             .persistent()
-            .get(&DataKey::Milestone(MilestoneKey::Record(creator, milestone_id)))
+            .get(&DataKey::Milestone(MilestoneKey::Record(
+                creator,
+                milestone_id,
+            )))
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::MilestoneNotFound))
     }
 
@@ -5496,8 +6108,14 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let tip_id: u64 = env.storage().instance().get(&DataKey::PrivateTip(PrivateTipKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::PrivateTip(PrivateTipKey::Ctr), &(tip_id + 1));
+        let tip_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PrivateTip(PrivateTipKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::PrivateTip(PrivateTipKey::Ctr), &(tip_id + 1));
 
         let amount_bytes = amount.to_le_bytes();
         let amount_hash = env.crypto().sha256(&amount_bytes);
@@ -5519,7 +6137,10 @@ impl TipJarContract {
             revealed: false,
         };
 
-        env.storage().persistent().set(&DataKey::PrivateTip(PrivateTipKey::Record(tip_id)), &private_tip);
+        env.storage().persistent().set(
+            &DataKey::PrivateTip(PrivateTipKey::Record(tip_id)),
+            &private_tip,
+        );
 
         env.events().publish(
             (symbol_short!("priv_tip"),),
@@ -5534,13 +6155,7 @@ impl TipJarContract {
     /// The amount is hashed and compared with the stored hash. If it matches,
     /// the tip is credited to the creator and marked as revealed.
     /// Emits `("tip_revealed",)` with data `(tip_id, amount)`.
-    pub fn reveal_tip(
-        env: Env,
-        sender: Address,
-        token: Address,
-        tip_id: u64,
-        amount: i128,
-    ) {
+    pub fn reveal_tip(env: Env, sender: Address, token: Address, tip_id: u64, amount: i128) {
         Self::require_not_paused(&env);
         sender.require_auth();
 
@@ -5571,39 +6186,52 @@ impl TipJarContract {
         }
 
         // Transfer tokens
-        token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(
+            &sender,
+            &env.current_contract_address(),
+            &amount,
+        );
 
-        let fee_bp: u32 = env.storage().instance().get(&DataKey::Fee(FeeKey::BasisPoints)).unwrap_or(0);
+        let fee_bp: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Fee(FeeKey::BasisPoints))
+            .unwrap_or(0);
         let fee: i128 = (amount * fee_bp as i128) / 10_000;
         let creator_amount = amount - fee;
 
         if fee > 0 {
             let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
             let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
-            let new_fee_bal: i128 = current_fee
-                .checked_add(fee)
-                .expect("fee overflow");
+            let new_fee_bal: i128 = current_fee.checked_add(fee).expect("fee overflow");
             env.storage().instance().set(&fee_key, &new_fee_bal);
         }
 
         let bal_key = DataKey::CreatorBalance(private_tip.creator.clone(), token.clone());
         let existing_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-        let new_bal: i128 = existing_bal.checked_add(creator_amount).expect("balance overflow");
+        let new_bal: i128 = existing_bal
+            .checked_add(creator_amount)
+            .expect("balance overflow");
         env.storage().persistent().set(&bal_key, &new_bal);
 
         let tot_key = DataKey::CreatorTotal(private_tip.creator.clone(), token.clone());
         let existing_tot: i128 = env.storage().persistent().get(&tot_key).unwrap_or(0);
-        let new_tot: i128 = existing_tot.checked_add(creator_amount).expect("total overflow");
+        let new_tot: i128 = existing_tot
+            .checked_add(creator_amount)
+            .expect("total overflow");
         env.storage().persistent().set(&tot_key, &new_tot);
 
         private_tip.revealed = true;
-        env.storage().persistent().set(&DataKey::PrivateTip(PrivateTipKey::Record(tip_id)), &private_tip);
-        env.storage().persistent().set(&DataKey::PrivateTip(PrivateTipKey::Amount(tip_id)), &amount);
-
-        env.events().publish(
-            (symbol_short!("tip_rev"),),
-            (tip_id, amount),
+        env.storage().persistent().set(
+            &DataKey::PrivateTip(PrivateTipKey::Record(tip_id)),
+            &private_tip,
         );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PrivateTip(PrivateTipKey::Amount(tip_id)), &amount);
+
+        env.events()
+            .publish((symbol_short!("tip_rev"),), (tip_id, amount));
     }
 
     /// Returns a private tip record by ID.
@@ -5662,7 +6290,11 @@ impl TipJarContract {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let stream_id: u64 = env.storage().instance().get(&DataKey::Stream(StreamKey::Ctr)).unwrap_or(0);
+        let stream_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Stream(StreamKey::Ctr))
+            .unwrap_or(0);
         let now = env.ledger().timestamp();
         let total_amount = amount_per_second * duration as i128;
 
@@ -5680,8 +6312,12 @@ impl TipJarContract {
             updated_at: now,
         };
 
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
-        env.storage().instance().set(&DataKey::Stream(StreamKey::Ctr), &(stream_id + 1));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
+        env.storage()
+            .instance()
+            .set(&DataKey::Stream(StreamKey::Ctr), &(stream_id + 1));
 
         // Add to sender's stream list
         let mut sender_streams: Vec<u64> = env
@@ -5690,7 +6326,10 @@ impl TipJarContract {
             .get(&DataKey::Stream(StreamKey::SenderStreams(sender.clone())))
             .unwrap_or_else(|| Vec::new(&env));
         sender_streams.push_back(stream_id);
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::SenderStreams(sender.clone())), &sender_streams);
+        env.storage().persistent().set(
+            &DataKey::Stream(StreamKey::SenderStreams(sender.clone())),
+            &sender_streams,
+        );
 
         // Add to creator's stream list
         let mut creator_streams: Vec<u64> = env
@@ -5699,10 +6338,17 @@ impl TipJarContract {
             .get(&DataKey::Stream(StreamKey::CreatorStreams(creator.clone())))
             .unwrap_or_else(|| Vec::new(&env));
         creator_streams.push_back(stream_id);
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::CreatorStreams(creator.clone())), &creator_streams);
+        env.storage().persistent().set(
+            &DataKey::Stream(StreamKey::CreatorStreams(creator.clone())),
+            &creator_streams,
+        );
 
         // Transfer total amount into escrow
-        token::Client::new(&env, &token).transfer(&sender, &env.current_contract_address(), &total_amount);
+        token::Client::new(&env, &token).transfer(
+            &sender,
+            &env.current_contract_address(),
+            &total_amount,
+        );
 
         env.events().publish(
             (symbol_short!("strm_cre"),),
@@ -5728,9 +6374,8 @@ impl TipJarContract {
             current_time - stream.start_time
         };
 
-        (stream.amount_per_second * elapsed as i128).min(
-            stream.amount_per_second * (stream.end_time - stream.start_time) as i128
-        )
+        (stream.amount_per_second * elapsed as i128)
+            .min(stream.amount_per_second * (stream.end_time - stream.start_time) as i128)
     }
 
     /// Starts a stream (or resumes a paused stream).
@@ -5772,12 +6417,12 @@ impl TipJarContract {
         stream.status = StreamStatus::Active;
         stream.updated_at = now;
 
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
 
-        env.events().publish(
-            (symbol_short!("strm_sta"),),
-            stream_id,
-        );
+        env.events()
+            .publish((symbol_short!("strm_sta"),), stream_id);
     }
 
     /// Stops (pauses) an active stream.
@@ -5811,12 +6456,12 @@ impl TipJarContract {
         stream.withdrawn = streamed_amount;
         stream.updated_at = env.ledger().timestamp();
 
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
 
-        env.events().publish(
-            (symbol_short!("strm_sto"),),
-            (stream_id, streamed_amount),
-        );
+        env.events()
+            .publish((symbol_short!("strm_sto"),), (stream_id, streamed_amount));
     }
 
     /// Withdraws the currently streamed amount for a stream.
@@ -5847,7 +6492,8 @@ impl TipJarContract {
             panic_with_error!(&env, InsuranceError::StreamNotStarted);
         }
 
-        let total_streamable = stream.amount_per_second * (stream.end_time - stream.start_time) as i128;
+        let total_streamable =
+            stream.amount_per_second * (stream.end_time - stream.start_time) as i128;
         let streamed_amount = Self::calculate_streamed_amount(&env, &stream);
         let available_to_withdraw = streamed_amount - stream.withdrawn;
 
@@ -5865,7 +6511,9 @@ impl TipJarContract {
 
         stream.updated_at = current_time;
 
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
 
         // Transfer tokens to creator
         token::Client::new(&env, &stream.token).transfer(
@@ -5917,7 +6565,9 @@ impl TipJarContract {
         stream.status = StreamStatus::Cancelled;
         stream.updated_at = current_time;
 
-        env.storage().persistent().set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Stream(StreamKey::Record(stream_id)), &stream);
 
         // Refund remaining tokens to sender
         if remaining_amount > 0 {
@@ -5931,15 +6581,15 @@ impl TipJarContract {
         // If there's any withdrawn amount not yet claimed, it's already in the creator's balance
         // (handled by the periodic withdraw_streamed calls)
 
-        env.events().publish(
-            (symbol_short!("strm_can"),),
-            (stream_id, remaining_amount),
-        );
+        env.events()
+            .publish((symbol_short!("strm_can"),), (stream_id, remaining_amount));
     }
 
     /// Returns the current stream details.
     pub fn get_stream(env: Env, stream_id: u64) -> Option<Stream> {
-        env.storage().persistent().get(&DataKey::Stream(StreamKey::Record(stream_id)))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Stream(StreamKey::Record(stream_id)))
     }
 
     /// Returns all stream IDs for a creator.
@@ -6033,11 +6683,19 @@ impl TipJarContract {
             admin_fee_bps,
             tip_premium_bps,
         };
-        env.storage().instance().set(&DataKey::Insurance(InsuranceKey::Cfg), &config);
+        env.storage()
+            .instance()
+            .set(&DataKey::Insurance(InsuranceKey::Cfg), &config);
 
         env.events().publish(
             (symbol_short!("ins_cfg"),),
-            (min_contribution, max_contribution, premium_rate_bps, payout_ratio_bps, tip_premium_bps),
+            (
+                min_contribution,
+                max_contribution,
+                premium_rate_bps,
+                payout_ratio_bps,
+                tip_premium_bps,
+            ),
         );
     }
 
@@ -6050,7 +6708,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::Insurance(InsuranceKey::Enabled), &enabled);
+        env.storage()
+            .instance()
+            .set(&DataKey::Insurance(InsuranceKey::Enabled), &enabled);
         env.events().publish((symbol_short!("ins_en"),), enabled);
     }
 
@@ -6066,8 +6726,11 @@ impl TipJarContract {
         if max_claims == 0 {
             panic_with_error!(&env, TipJarError::InvalidAmount);
         }
-        env.storage().instance().set(&DataKey::Insurance(InsuranceKey::MaxClms), &max_claims);
-        env.events().publish((symbol_short!("ins_max"),), max_claims);
+        env.storage()
+            .instance()
+            .set(&DataKey::Insurance(InsuranceKey::MaxClms), &max_claims);
+        env.events()
+            .publish((symbol_short!("ins_max"),), max_claims);
     }
 
     /// Set the insurance admin address.
@@ -6079,8 +6742,11 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::Insurance(InsuranceKey::Admin), &insurance_admin);
-        env.events().publish((symbol_short!("ins_adm"),), insurance_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::Insurance(InsuranceKey::Admin), &insurance_admin);
+        env.events()
+            .publish((symbol_short!("ins_adm"),), insurance_admin);
     }
 
     /// Contribute to the insurance pool for a specific token.
@@ -6089,17 +6755,16 @@ impl TipJarContract {
     /// must be within configured limits. The sender must transfer the tokens to this contract.
     ///
     /// Emits `("insurance_contribution",)` with data `(creator, token, amount, coverage_amount)`.
-    pub fn insurance_contribute(
-        env: Env,
-        creator: Address,
-        token: Address,
-        amount: i128,
-    ) {
+    pub fn insurance_contribute(env: Env, creator: Address, token: Address, amount: i128) {
         Self::require_not_paused(&env);
         creator.require_auth();
 
         // Check if insurance is enabled
-        let enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         if !enabled {
             panic_with_error!(&env, InsuranceError::InsuranceDisabled);
         }
@@ -6128,26 +6793,30 @@ impl TipJarContract {
         }
 
         // Transfer tokens from creator to contract
-        token::Client::new(&env, &token).transfer(&creator, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &token).transfer(
+            &creator,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         // Calculate premium for this contribution period
         let premium_amount = (amount * config.premium_rate_bps as i128) / 10_000;
 
         // Update pool state
         let pool_key = DataKey::Insurance(InsuranceKey::Token(token.clone()));
-        let mut pool: InsurancePool = env
-            .storage()
-            .persistent()
-            .get(&pool_key)
-            .unwrap_or_else(|| InsurancePool {
-                token: token.clone(),
-                total_reserves: 0,
-                total_contributions: 0,
-                total_claims_paid: 0,
-                active_claims: 0,
-                total_claims: 0,
-                last_payout_time: env.ledger().timestamp(),
-            });
+        let mut pool: InsurancePool =
+            env.storage()
+                .persistent()
+                .get(&pool_key)
+                .unwrap_or_else(|| InsurancePool {
+                    token: token.clone(),
+                    total_reserves: 0,
+                    total_contributions: 0,
+                    total_claims_paid: 0,
+                    active_claims: 0,
+                    total_claims: 0,
+                    last_payout_time: env.ledger().timestamp(),
+                });
 
         pool.total_reserves += amount - premium_amount;
         pool.total_contributions += amount;
@@ -6156,11 +6825,17 @@ impl TipJarContract {
         // Update creator contribution
         let contrib_key = DataKey::Insurance(InsuranceKey::Contrib(creator.clone(), token.clone()));
         let current_contrib: i128 = env.storage().persistent().get(&contrib_key).unwrap_or(0);
-        env.storage().persistent().set(&contrib_key, &(current_contrib + amount));
+        env.storage()
+            .persistent()
+            .set(&contrib_key, &(current_contrib + amount));
 
         // Add to creator's token list
         let tokens_key = DataKey::CreatorTokens(creator.clone());
-        let mut tokens: Vec<Address> = env.storage().persistent().get(&tokens_key).unwrap_or_else(|| Vec::new(&env));
+        let mut tokens: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&tokens_key)
+            .unwrap_or_else(|| Vec::new(&env));
         if !tokens.contains(&token) {
             tokens.push_back(token.clone());
             env.storage().persistent().set(&tokens_key, &tokens);
@@ -6170,7 +6845,9 @@ impl TipJarContract {
         if premium_amount > 0 {
             let fee_key = DataKey::Fee(FeeKey::Balance(token.clone()));
             let current_fee: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
-            env.storage().instance().set(&fee_key, &(current_fee + premium_amount));
+            env.storage()
+                .instance()
+                .set(&fee_key, &(current_fee + premium_amount));
         }
 
         env.events().publish(
@@ -6201,7 +6878,11 @@ impl TipJarContract {
         }
 
         // Check if insurance is enabled
-        let enabled: bool = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true);
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true);
         if !enabled {
             panic_with_error!(&env, InsuranceError::InsuranceDisabled);
         }
@@ -6220,15 +6901,21 @@ impl TipJarContract {
         }
 
         // Check active claim limit
-        let max_active: u32 = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::MaxClms)).unwrap_or(3);
-        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(creator.clone(), token.clone()));
+        let max_active: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::MaxClms))
+            .unwrap_or(3);
+        let active_key =
+            DataKey::Insurance(InsuranceKey::ActiveClms(creator.clone(), token.clone()));
         let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(0);
         if active_claims >= max_active {
             panic_with_error!(&env, InsuranceError::TooManyActiveClaims);
         }
 
         // Check last claim cooldown
-        let last_claim_key = DataKey::Insurance(InsuranceKey::LastClm(creator.clone(), token.clone()));
+        let last_claim_key =
+            DataKey::Insurance(InsuranceKey::LastClm(creator.clone(), token.clone()));
         let last_claim: u64 = env.storage().persistent().get(&last_claim_key).unwrap_or(0);
         let now = env.ledger().timestamp();
         if last_claim > 0 && now < last_claim + config.claim_cooldown {
@@ -6252,8 +6939,14 @@ impl TipJarContract {
         }
 
         // Create claim
-        let claim_id: u64 = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Insurance(InsuranceKey::Ctr), &(claim_id + 1));
+        let claim_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Insurance(InsuranceKey::Ctr), &(claim_id + 1));
 
         let claim = InsuranceClaim {
             claim_id,
@@ -6266,21 +6959,39 @@ impl TipJarContract {
             updated_at: now,
             last_claim_at: last_claim,
         };
-        env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
         // Add to creator's claims list
-        let creator_claims_key = DataKey::Insurance(InsuranceKey::Clms(creator.clone(), token.clone()));
-        let mut creator_claims: Vec<u64> = env.storage().persistent().get(&creator_claims_key).unwrap_or_else(|| Vec::new(&env));
+        let creator_claims_key =
+            DataKey::Insurance(InsuranceKey::Clms(creator.clone(), token.clone()));
+        let mut creator_claims: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&creator_claims_key)
+            .unwrap_or_else(|| Vec::new(&env));
         creator_claims.push_back(claim_id);
-        env.storage().persistent().set(&creator_claims_key, &creator_claims);
+        env.storage()
+            .persistent()
+            .set(&creator_claims_key, &creator_claims);
 
         // Update active claim count
-        env.storage().persistent().set(&active_key, &(active_claims + 1));
+        env.storage()
+            .persistent()
+            .set(&active_key, &(active_claims + 1));
 
         // Update total claims count
-        let total_claims_key = DataKey::Insurance(InsuranceKey::TotalClms(creator.clone(), token.clone()));
-        let total_claims: u32 = env.storage().persistent().get(&total_claims_key).unwrap_or(0);
-        env.storage().persistent().set(&total_claims_key, &(total_claims + 1));
+        let total_claims_key =
+            DataKey::Insurance(InsuranceKey::TotalClms(creator.clone(), token.clone()));
+        let total_claims: u32 = env
+            .storage()
+            .persistent()
+            .get(&total_claims_key)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&total_claims_key, &(total_claims + 1));
 
         // Update pool
         let mut updated_pool = pool.clone();
@@ -6302,16 +7013,16 @@ impl TipJarContract {
     /// Once approved, the claim can be paid out.
     ///
     /// Emits `("claim_approved",)` with data `(claim_id, approver)`.
-    pub fn insurance_approve_claim(
-        env: Env,
-        approver: Address,
-        claim_id: u64,
-    ) {
+    pub fn insurance_approve_claim(env: Env, approver: Address, claim_id: u64) {
         approver.require_auth();
 
         // Check if caller is admin or insurance admin
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        let insurance_admin: Address = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Admin)).unwrap_or(stored_admin.clone());
+        let insurance_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Admin))
+            .unwrap_or(stored_admin.clone());
         if approver != stored_admin && approver != insurance_admin {
             panic_with_error!(&env, InsuranceError::AdmAppReq);
         }
@@ -6329,7 +7040,9 @@ impl TipJarContract {
         let mut updated_claim = claim.clone();
         updated_claim.status = ClaimStatus::Approved;
         updated_claim.updated_at = env.ledger().timestamp();
-        env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
         // Update pool
         let pool_key = DataKey::Insurance(InsuranceKey::Token(claim.token.clone()));
@@ -6339,14 +7052,17 @@ impl TipJarContract {
         env.storage().persistent().set(&pool_key, &updated_pool);
 
         // Update creator active claims
-        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(claim.creator.clone(), claim.token.clone()));
+        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(
+            claim.creator.clone(),
+            claim.token.clone(),
+        ));
         let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
-        env.storage().persistent().set(&active_key, &(active_claims - 1));
+        env.storage()
+            .persistent()
+            .set(&active_key, &(active_claims - 1));
 
-        env.events().publish(
-            (symbol_short!("clm_app"),),
-            (claim_id, approver),
-        );
+        env.events()
+            .publish((symbol_short!("clm_app"),), (claim_id, approver));
     }
 
     /// Reject an insurance claim (admin or insurance admin).
@@ -6354,16 +7070,16 @@ impl TipJarContract {
     /// Only the contract admin or insurance admin can reject claims.
     ///
     /// Emits `("claim_rejected",)` with data `(claim_id, rejector)`.
-    pub fn insurance_reject_claim(
-        env: Env,
-        rejector: Address,
-        claim_id: u64,
-    ) {
+    pub fn insurance_reject_claim(env: Env, rejector: Address, claim_id: u64) {
         rejector.require_auth();
 
         // Check if caller is admin or insurance admin
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        let insurance_admin: Address = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Admin)).unwrap_or(stored_admin.clone());
+        let insurance_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Admin))
+            .unwrap_or(stored_admin.clone());
         if rejector != stored_admin && rejector != insurance_admin {
             panic_with_error!(&env, InsuranceError::AdmAppReq);
         }
@@ -6381,7 +7097,9 @@ impl TipJarContract {
         let mut updated_claim = claim.clone();
         updated_claim.status = ClaimStatus::Rejected;
         updated_claim.updated_at = env.ledger().timestamp();
-        env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
         if claim.status == ClaimStatus::Approved {
             // Update pool
@@ -6392,15 +7110,18 @@ impl TipJarContract {
             env.storage().persistent().set(&pool_key, &updated_pool);
 
             // Update creator active claims
-            let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(claim.creator.clone(), claim.token.clone()));
+            let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(
+                claim.creator.clone(),
+                claim.token.clone(),
+            ));
             let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
-            env.storage().persistent().set(&active_key, &(active_claims - 1));
+            env.storage()
+                .persistent()
+                .set(&active_key, &(active_claims - 1));
         }
 
-        env.events().publish(
-            (symbol_short!("clm_rej"),),
-            (claim_id, rejector),
-        );
+        env.events()
+            .publish((symbol_short!("clm_rej"),), (claim_id, rejector));
     }
 
     /// Pay out an approved insurance claim.
@@ -6409,16 +7130,16 @@ impl TipJarContract {
     /// Can only be called for approved claims that haven't been paid yet.
     ///
     /// Emits `("claim_paid",)` with data `(claim_id, amount, creator)`.
-    pub fn insurance_pay_claim(
-        env: Env,
-        caller: Address,
-        claim_id: u64,
-    ) {
+    pub fn insurance_pay_claim(env: Env, caller: Address, claim_id: u64) {
         caller.require_auth();
 
         // Check if caller is admin or insurance admin
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        let insurance_admin: Address = env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Admin)).unwrap_or(stored_admin.clone());
+        let insurance_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Admin))
+            .unwrap_or(stored_admin.clone());
         if caller != stored_admin && caller != insurance_admin {
             panic_with_error!(&env, InsuranceError::AdmAppReq);
         }
@@ -6446,10 +7167,15 @@ impl TipJarContract {
         }
 
         // Update creator's contribution (deduct claim amount)
-        let contrib_key = DataKey::Insurance(InsuranceKey::Contrib(claim.creator.clone(), claim.token.clone()));
+        let contrib_key = DataKey::Insurance(InsuranceKey::Contrib(
+            claim.creator.clone(),
+            claim.token.clone(),
+        ));
         let current_contrib: i128 = env.storage().persistent().get(&contrib_key).unwrap_or(0);
         let new_contrib = current_contrib - claim.amount;
-        env.storage().persistent().set(&contrib_key, &new_contrib.max(0));
+        env.storage()
+            .persistent()
+            .set(&contrib_key, &new_contrib.max(0));
 
         // Update pool reserves
         let mut updated_pool = pool.clone();
@@ -6463,15 +7189,27 @@ impl TipJarContract {
         let mut updated_claim = claim.clone();
         updated_claim.status = ClaimStatus::Paid;
         updated_claim.updated_at = env.ledger().timestamp();
-        env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
         // Update creator's last claim time and active claims
-        let last_claim_key = DataKey::Insurance(InsuranceKey::LastClm(claim.creator.clone(), claim.token.clone()));
-        env.storage().persistent().set(&last_claim_key, &env.ledger().timestamp());
+        let last_claim_key = DataKey::Insurance(InsuranceKey::LastClm(
+            claim.creator.clone(),
+            claim.token.clone(),
+        ));
+        env.storage()
+            .persistent()
+            .set(&last_claim_key, &env.ledger().timestamp());
 
-        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(claim.creator.clone(), claim.token.clone()));
+        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(
+            claim.creator.clone(),
+            claim.token.clone(),
+        ));
         let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
-        env.storage().persistent().set(&active_key, &(active_claims - 1));
+        env.storage()
+            .persistent()
+            .set(&active_key, &(active_claims - 1));
 
         // Transfer funds to creator
         token::Client::new(&env, &claim.token).transfer(
@@ -6496,12 +7234,17 @@ impl TipJarContract {
 
     /// Check if the insurance feature is enabled.
     pub fn insurance_is_enabled(env: Env) -> bool {
-        env.storage().instance().get(&DataKey::Insurance(InsuranceKey::Enabled)).unwrap_or(true)
+        env.storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::Enabled))
+            .unwrap_or(true)
     }
 
     /// Get the insurance pool state for a specific token.
     pub fn insurance_get_pool(env: Env, token: Address) -> Option<InsurancePool> {
-        env.storage().persistent().get(&DataKey::Insurance(InsuranceKey::Token(token)))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Insurance(InsuranceKey::Token(token)))
     }
 
     /// Get a specific insurance claim by ID.
@@ -6532,7 +7275,10 @@ impl TipJarContract {
         let contrib: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::Insurance(InsuranceKey::Contrib(creator.clone(), token.clone())))
+            .get(&DataKey::Insurance(InsuranceKey::Contrib(
+                creator.clone(),
+                token.clone(),
+            )))
             .unwrap_or(0);
 
         // Automatic premium coverage estimate from tips received
@@ -6541,8 +7287,8 @@ impl TipJarContract {
             .persistent()
             .get(&DataKey::CreatorTotal(creator, token))
             .unwrap_or(0);
-        
-        // Since CreatorTotal is net of fees and premiums, we approximate the original gross 
+
+        // Since CreatorTotal is net of fees and premiums, we approximate the original gross
         // to find the premium paid. Gross = Net / (1 - fee_bps - premium_bps)
         // For simplicity, we use Net * premium_bps as a conservative estimate of coverage earned.
         let premium_earned = (total_received * config.tip_premium_bps as i128) / 10_000;
@@ -6554,7 +7300,9 @@ impl TipJarContract {
     pub fn insurance_get_active_claims(env: Env, creator: Address, token: Address) -> u32 {
         env.storage()
             .persistent()
-            .get(&DataKey::Insurance(InsuranceKey::ActiveClms(creator, token)))
+            .get(&DataKey::Insurance(InsuranceKey::ActiveClms(
+                creator, token,
+            )))
             .unwrap_or(0)
     }
 
@@ -6580,12 +7328,7 @@ impl TipJarContract {
     ///
     /// Allows admin to withdraw funds beyond a minimum reserve threshold.
     /// Emits `("pool_withdraw",)` with data `(token, amount)`.
-    pub fn insurance_withdraw_excess(
-        env: Env,
-        admin: Address,
-        token: Address,
-        amount: i128,
-    ) {
+    pub fn insurance_withdraw_excess(env: Env, admin: Address, token: Address, amount: i128) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -6614,28 +7357,26 @@ impl TipJarContract {
         env.storage().persistent().set(&pool_key, &updated_pool);
 
         // Transfer to admin
-        token::Client::new(&env, &token).transfer(
-            &env.current_contract_address(),
-            &admin,
-            &amount,
-        );
+        token::Client::new(&env, &token).transfer(&env.current_contract_address(), &admin, &amount);
 
-        env.events().publish(
-            (symbol_short!("pol_wit"),),
-            (token, amount),
-        );
+        env.events()
+            .publish((symbol_short!("pol_wit"),), (token, amount));
     }
 
     /// Get the insurance admin address.
     pub fn insurance_get_admin(env: Env) -> Address {
-        env.storage().instance()
+        env.storage()
+            .instance()
             .get(&DataKey::Insurance(InsuranceKey::Admin))
             .unwrap_or_else(|| env.storage().instance().get(&DataKey::Admin).unwrap())
     }
 
     /// Get the maximum active claims per creator.
     pub fn insurance_get_max_active_claims(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::Insurance(InsuranceKey::MaxClms)).unwrap_or(3)
+        env.storage()
+            .instance()
+            .get(&DataKey::Insurance(InsuranceKey::MaxClms))
+            .unwrap_or(3)
     }
 
     /// Process multiple insurance claims in batch (admin only).
@@ -6670,7 +7411,9 @@ impl TipJarContract {
                     let mut updated_claim = claim.clone();
                     updated_claim.status = ClaimStatus::Approved;
                     updated_claim.updated_at = env.ledger().timestamp();
-                    env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
                     // Update pool active claims
                     let pool_key = DataKey::Insurance(InsuranceKey::Token(claim.token.clone()));
@@ -6680,9 +7423,15 @@ impl TipJarContract {
                     env.storage().persistent().set(&pool_key, &updated_pool);
 
                     // Update creator active claims
-                    let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(claim.creator.clone(), claim.token.clone()));
-                    let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
-                    env.storage().persistent().set(&active_key, &(active_claims - 1));
+                    let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(
+                        claim.creator.clone(),
+                        claim.token.clone(),
+                    ));
+                    let active_claims: u32 =
+                        env.storage().persistent().get(&active_key).unwrap_or(1);
+                    env.storage()
+                        .persistent()
+                        .set(&active_key, &(active_claims - 1));
 
                     approved_count += 1;
                 }
@@ -6702,16 +7451,29 @@ impl TipJarContract {
                         let mut updated_claim = claim.clone();
                         updated_claim.status = ClaimStatus::Paid;
                         updated_claim.updated_at = env.ledger().timestamp();
-                        env.storage().persistent().set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
+                        env.storage()
+                            .persistent()
+                            .set(&DataKey::Insurance(InsuranceKey::Claim(claim_id)), &claim);
 
                         // Update creator last claim time
-                        let last_claim_key = DataKey::Insurance(InsuranceKey::LastClm(claim.creator.clone(), claim.token.clone()));
-                        env.storage().persistent().set(&last_claim_key, &env.ledger().timestamp());
+                        let last_claim_key = DataKey::Insurance(InsuranceKey::LastClm(
+                            claim.creator.clone(),
+                            claim.token.clone(),
+                        ));
+                        env.storage()
+                            .persistent()
+                            .set(&last_claim_key, &env.ledger().timestamp());
 
                         // Update creator active claims
-                        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(claim.creator.clone(), claim.token.clone()));
-                        let active_claims: u32 = env.storage().persistent().get(&active_key).unwrap_or(1);
-                        env.storage().persistent().set(&active_key, &(active_claims - 1));
+                        let active_key = DataKey::Insurance(InsuranceKey::ActiveClms(
+                            claim.creator.clone(),
+                            claim.token.clone(),
+                        ));
+                        let active_claims: u32 =
+                            env.storage().persistent().get(&active_key).unwrap_or(1);
+                        env.storage()
+                            .persistent()
+                            .set(&active_key, &(active_claims - 1));
 
                         // Transfer funds
                         token::Client::new(&env, &claim.token).transfer(
@@ -6726,20 +7488,14 @@ impl TipJarContract {
             }
         }
 
-        env.events().publish(
-            (symbol_short!("clm_pro"),),
-            (approved_count, paid_count),
-        );
+        env.events()
+            .publish((symbol_short!("clm_pro"),), (approved_count, paid_count));
     }
 
     /// Get all insurance claims for a specific creator and token.
     ///
     /// Returns a vector of claim IDs for the creator's claims.
-    pub fn insurance_get_claims_by_creator(
-        env: Env,
-        creator: Address,
-        token: Address,
-    ) -> Vec<u64> {
+    pub fn insurance_get_claims_by_creator(env: Env, creator: Address, token: Address) -> Vec<u64> {
         env.storage()
             .persistent()
             .get(&DataKey::Insurance(InsuranceKey::Clms(creator, token)))
@@ -6757,13 +7513,17 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::Bridge(BridgeKey::Relayer), &relayer);
-        env.storage().instance().set(&DataKey::Bridge(BridgeKey::Token), &token);
-        env.storage().instance().set(&DataKey::Bridge(BridgeKey::Enabled), &true);
-        env.events().publish(
-            (symbol_short!("br_cfg"),),
-            (relayer, token),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::Bridge(BridgeKey::Relayer), &relayer);
+        env.storage()
+            .instance()
+            .set(&DataKey::Bridge(BridgeKey::Token), &token);
+        env.storage()
+            .instance()
+            .set(&DataKey::Bridge(BridgeKey::Enabled), &true);
+        env.events()
+            .publish((symbol_short!("br_cfg"),), (relayer, token));
     }
 
     /// Processes a bridged tip submitted by an authorized relayer.
@@ -6791,7 +7551,9 @@ impl TipJarContract {
         if fee_bps > 500 {
             panic_with_error!(&env, AuctionError::InvalidBridgeFee);
         }
-        env.storage().instance().set(&DataKey::Bridge(BridgeKey::FeeBps), &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::Bridge(BridgeKey::FeeBps), &fee_bps);
         env.events().publish((symbol_short!("br_fee"),), fee_bps);
     }
 
@@ -6812,7 +7574,9 @@ impl TipJarContract {
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::Bridge(BridgeKey::Enabled), &enabled);
+        env.storage()
+            .instance()
+            .set(&DataKey::Bridge(BridgeKey::Enabled), &enabled);
         env.events().publish((symbol_short!("br_en"),), enabled);
     }
 
@@ -6823,7 +7587,7 @@ impl TipJarContract {
             .get(&DataKey::Bridge(BridgeKey::Enabled))
             .unwrap_or(false)
     }
-a
+
     // ── options trading ──────────────────────────────────────────────────────
 
     /// Initialize options trading system with default pricing parameters.
@@ -6846,7 +7610,7 @@ a
         env.storage()
             .persistent()
             .set(&DataKey::Option(OptionKey::PricingParams), &params);
-        
+
         env.storage()
             .instance()
             .set(&DataKey::Option(OptionKey::Ctr), &0u64);
@@ -6895,8 +7659,14 @@ a
         let collateral = options::calculate_collateral(option_type, strike_price, amount);
 
         // Generate option ID
-        let option_id: u64 = env.storage().instance().get(&DataKey::Option(OptionKey::Ctr)).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Option(OptionKey::Ctr), &(option_id + 1));
+        let option_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Option(OptionKey::Ctr))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Option(OptionKey::Ctr), &(option_id + 1));
 
         // Create option contract
         let option = options::OptionContract {
@@ -6925,7 +7695,7 @@ a
         env.storage()
             .persistent()
             .set(&DataKey::Option(OptionKey::Record(option_id)), &option);
-        
+
         options::add_written_option(&env, &writer, option_id);
         options::add_active_option(&env, option_id);
 
@@ -6941,7 +7711,14 @@ a
 
         env.events().publish(
             (symbol_short!("opt_wrt"),),
-            (option_id, writer, option_type, strike_price, amount, expiration),
+            (
+                option_id,
+                writer,
+                option_type,
+                strike_price,
+                amount,
+                expiration,
+            ),
         );
 
         option_id
@@ -6951,12 +7728,7 @@ a
     ///
     /// Premium is calculated based on current pricing parameters.
     /// Emits `("opt_buy",)` with data `(option_id, buyer, premium)`.
-    pub fn buy_option(
-        env: Env,
-        buyer: Address,
-        option_id: u64,
-        spot_price: i128,
-    ) {
+    pub fn buy_option(env: Env, buyer: Address, option_id: u64, spot_price: i128) {
         Self::require_not_paused(&env);
         buyer.require_auth();
 
@@ -6995,11 +7767,7 @@ a
         );
 
         // Transfer premium from buyer to writer
-        token::Client::new(&env, &option.token).transfer(
-            &buyer,
-            &option.writer,
-            &premium,
-        );
+        token::Client::new(&env, &option.token).transfer(&buyer, &option.writer, &premium);
 
         // Update option
         option.holder = Some(buyer.clone());
@@ -7021,10 +7789,8 @@ a
         // Add to buyer's held options
         options::add_held_option(&env, &buyer, option_id);
 
-        env.events().publish(
-            (symbol_short!("opt_buy"),),
-            (option_id, buyer, premium),
-        );
+        env.events()
+            .publish((symbol_short!("opt_buy"),), (option_id, buyer, premium));
     }
 
     /// Exercise an option contract.
@@ -7032,21 +7798,14 @@ a
     /// Only the holder can exercise. Option must be in the money.
     /// Returns the payoff amount.
     /// Emits `("opt_exer",)` with data `(option_id, holder, payoff)`.
-    pub fn exercise_option(
-        env: Env,
-        holder: Address,
-        option_id: u64,
-        spot_price: i128,
-    ) -> i128 {
+    pub fn exercise_option(env: Env, holder: Address, option_id: u64, spot_price: i128) -> i128 {
         Self::require_not_paused(&env);
         holder.require_auth();
 
         let payoff = options::exercise::exercise_option(&env, &holder, option_id, spot_price);
 
-        env.events().publish(
-            (symbol_short!("opt_exer"),),
-            (option_id, holder, payoff),
-        );
+        env.events()
+            .publish((symbol_short!("opt_exer"),), (option_id, holder, payoff));
 
         payoff
     }
@@ -7058,10 +7817,7 @@ a
     pub fn expire_option(env: Env, option_id: u64) {
         options::exercise::expire_option(&env, option_id);
 
-        env.events().publish(
-            (symbol_short!("opt_exp"),),
-            option_id,
-        );
+        env.events().publish((symbol_short!("opt_exp"),), option_id);
     }
 
     /// Cancel an unsold option (writer only).
@@ -7074,10 +7830,8 @@ a
 
         options::exercise::cancel_option(&env, &writer, option_id);
 
-        env.events().publish(
-            (symbol_short!("opt_canc"),),
-            option_id,
-        );
+        env.events()
+            .publish((symbol_short!("opt_canc"),), option_id);
     }
 
     /// Get option contract details by ID.
@@ -7140,11 +7894,7 @@ a
     /// Update option pricing parameters (admin only).
     ///
     /// Emits `("opt_prm",)` with data `params`.
-    pub fn update_option_pricing(
-        env: Env,
-        admin: Address,
-        params: options::PricingParams,
-    ) {
+    pub fn update_option_pricing(env: Env, admin: Address, params: options::PricingParams) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -7153,10 +7903,7 @@ a
 
         options::update_pricing_params(&env, &params);
 
-        env.events().publish(
-            (symbol_short!("opt_prm"),),
-            params,
-        );
+        env.events().publish((symbol_short!("opt_prm"),), params);
     }
 
     /// Get current option pricing parameters.
@@ -7173,7 +7920,7 @@ a
         for i in 0..option_ids.len() {
             ids_vec.push_back(option_ids.get(i).unwrap());
         }
-        
+
         let mut expired_count = 0u32;
         for i in 0..ids_vec.len() {
             let option_id = ids_vec.get(i).unwrap();
@@ -7188,10 +7935,8 @@ a
             }
         }
 
-        env.events().publish(
-            (symbol_short!("opt_bexp"),),
-            expired_count,
-        );
+        env.events()
+            .publish((symbol_short!("opt_bexp"),), expired_count);
 
         expired_count
     }
@@ -7217,14 +7962,11 @@ a
             panic_with_error!(&env, TipJarError::InvalidIndexWeights);
         }
 
-        let fund_id = index_fund::composition::create_index_fund(
-            &env, &manager, &token, name, components,
-        );
+        let fund_id =
+            index_fund::composition::create_index_fund(&env, &manager, &token, name, components);
 
-        env.events().publish(
-            (symbol_short!("idx_new"),),
-            (manager, fund_id),
-        );
+        env.events()
+            .publish((symbol_short!("idx_new"),), (manager, fund_id));
 
         fund_id
     }
@@ -7248,10 +7990,8 @@ a
 
         index_fund::composition::update_composition(&env, fund_id, &caller, new_components);
 
-        env.events().publish(
-            (symbol_short!("idx_upd"),),
-            (caller, fund_id),
-        );
+        env.events()
+            .publish((symbol_short!("idx_upd"),), (caller, fund_id));
     }
 
     /// Rebalance a fund's creator allocations to match current target weights.
@@ -7261,20 +8001,13 @@ a
 
         index_fund::rebalance::rebalance(&env, fund_id, &caller);
 
-        env.events().publish(
-            (symbol_short!("idx_reb"),),
-            (caller, fund_id),
-        );
+        env.events()
+            .publish((symbol_short!("idx_reb"),), (caller, fund_id));
     }
 
     /// Deposit tokens into an index fund and receive shares.
     /// Returns the number of shares minted.
-    pub fn deposit_index_fund(
-        env: Env,
-        depositor: Address,
-        fund_id: u64,
-        amount: i128,
-    ) -> i128 {
+    pub fn deposit_index_fund(env: Env, depositor: Address, fund_id: u64, amount: i128) -> i128 {
         Self::require_not_paused(&env);
 
         if amount < index_fund::MIN_DEPOSIT {
@@ -7293,12 +8026,7 @@ a
 
     /// Withdraw from an index fund by redeeming shares.
     /// Returns the token amount returned to the holder.
-    pub fn withdraw_index_fund(
-        env: Env,
-        holder: Address,
-        fund_id: u64,
-        shares: i128,
-    ) -> i128 {
+    pub fn withdraw_index_fund(env: Env, holder: Address, fund_id: u64, shares: i128) -> i128 {
         Self::require_not_paused(&env);
 
         if shares <= 0 {
@@ -7326,10 +8054,7 @@ a
     }
 
     /// Get the current creator allocations for a fund.
-    pub fn get_index_fund_allocations(
-        env: Env,
-        fund_id: u64,
-    ) -> Vec<(Address, i128)> {
+    pub fn get_index_fund_allocations(env: Env, fund_id: u64) -> Vec<(Address, i128)> {
         index_fund::rebalance::get_allocations(&env, fund_id)
     }
 
@@ -7459,7 +8184,8 @@ a
 
         prediction_market::close_market(&env, &caller, market_id);
 
-        env.events().publish((symbol_short!("pm_close"),), market_id);
+        env.events()
+            .publish((symbol_short!("pm_close"),), market_id);
     }
 
     /// Resolve a prediction market with the winning outcome.
@@ -7487,10 +8213,8 @@ a
 
         prediction_market::resolve_market(&env, &resolver, market_id, winning_outcome);
 
-        env.events().publish(
-            (symbol_short!("pm_res"),),
-            (market_id, winning_outcome),
-        );
+        env.events()
+            .publish((symbol_short!("pm_res"),), (market_id, winning_outcome));
     }
 
     /// Cancel a prediction market and enable full refunds.
@@ -7511,7 +8235,8 @@ a
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         prediction_market::cancel_market(&env, &caller, market_id, &admin);
 
-        env.events().publish((symbol_short!("pm_cancel"),), market_id);
+        env.events()
+            .publish((symbol_short!("pm_cancel"),), market_id);
     }
 
     /// Claim winnings (or a refund for a cancelled market).
@@ -7539,10 +8264,8 @@ a
 
         let payout = prediction_market::claim_winnings(&env, &bettor, market_id);
 
-        env.events().publish(
-            (symbol_short!("pm_claim"),),
-            (market_id, bettor, payout),
-        );
+        env.events()
+            .publish((symbol_short!("pm_claim"),), (market_id, bettor, payout));
 
         payout
     }
@@ -7627,7 +8350,10 @@ a
             liquidation_penalty_bps,
         };
         futures::save_config(&env, &cfg);
-        env.events().publish((symbol_short!("ft_cfg"),), (initial_margin_bps, maintenance_margin_bps));
+        env.events().publish(
+            (symbol_short!("ft_cfg"),),
+            (initial_margin_bps, maintenance_margin_bps),
+        );
     }
 
     /// Open a new futures contract (long side).
@@ -7669,7 +8395,14 @@ a
 
         env.events().publish(
             (symbol_short!("ft_open"),),
-            (contract_id, long_party, token, contract_price, size, settles_at),
+            (
+                contract_id,
+                long_party,
+                token,
+                contract_price,
+                size,
+                settles_at,
+            ),
         );
 
         contract_id
@@ -7695,22 +8428,15 @@ a
 
         futures::match_short(&env, &short_party, contract_id);
 
-        env.events().publish(
-            (symbol_short!("ft_match"),),
-            (contract_id, short_party),
-        );
+        env.events()
+            .publish((symbol_short!("ft_match"),), (contract_id, short_party));
     }
 
     /// Update the mark price for a futures contract (oracle / admin only).
     ///
     /// Recalculates unrealised P&L for both sides.
     /// Emits `("ft_mark",)`.
-    pub fn update_futures_mark_price(
-        env: Env,
-        admin: Address,
-        contract_id: u64,
-        new_price: i128,
-    ) {
+    pub fn update_futures_mark_price(env: Env, admin: Address, contract_id: u64, new_price: i128) {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
@@ -7728,10 +8454,8 @@ a
 
         futures::update_mark_price(&env, contract_id, new_price);
 
-        env.events().publish(
-            (symbol_short!("ft_mark"),),
-            (contract_id, new_price),
-        );
+        env.events()
+            .publish((symbol_short!("ft_mark"),), (contract_id, new_price));
     }
 
     /// Add margin to a futures position to avoid liquidation.
@@ -7760,10 +8484,8 @@ a
 
         futures::add_margin(&env, &trader, contract_id, side, amount);
 
-        env.events().publish(
-            (symbol_short!("ft_margin"),),
-            (contract_id, trader, amount),
-        );
+        env.events()
+            .publish((symbol_short!("ft_margin"),), (contract_id, trader, amount));
     }
 
     /// Liquidate an under-margined futures position.
@@ -7818,7 +8540,8 @@ a
 
         futures::settlement::mark_pending(&env, contract_id);
 
-        env.events().publish((symbol_short!("ft_pend"),), contract_id);
+        env.events()
+            .publish((symbol_short!("ft_pend"),), contract_id);
     }
 
     /// Settle a futures contract at the given final price.
@@ -7890,16 +8613,14 @@ a
 
         futures::cancel_contract(&env, &caller, contract_id);
 
-        env.events().publish((symbol_short!("ft_cancel"),), contract_id);
+        env.events()
+            .publish((symbol_short!("ft_cancel"),), contract_id);
     }
 
     // ── futures queries ──────────────────────────────────────────────────────
 
     /// Get a futures contract by ID.
-    pub fn get_futures_contract(
-        env: Env,
-        contract_id: u64,
-    ) -> Option<futures::FuturesContract> {
+    pub fn get_futures_contract(env: Env, contract_id: u64) -> Option<futures::FuturesContract> {
         futures::get_contract(&env, contract_id)
     }
 
@@ -8021,11 +8742,7 @@ a
     ///
     /// Recomputes rolling mean, variance, and volatility in basis points.
     /// Stores a history snapshot. Emits `("tvi_upd",)`.
-    pub fn record_volatility_observation(
-        env: Env,
-        index_id: u64,
-        amount: i128,
-    ) {
+    pub fn record_volatility_observation(env: Env, index_id: u64, amount: i128) {
         if amount <= 0 {
             panic_with_error!(&env, TipJarError::InvalidAmount);
         }
@@ -8081,10 +8798,7 @@ a
     // ── volatility queries ───────────────────────────────────────────────────
 
     /// Get the current state of a volatility index.
-    pub fn get_volatility_index(
-        env: Env,
-        index_id: u64,
-    ) -> Option<volatility::VolatilityIndex> {
+    pub fn get_volatility_index(env: Env, index_id: u64) -> Option<volatility::VolatilityIndex> {
         volatility::get_index(&env, index_id)
     }
 
@@ -8122,10 +8836,7 @@ a
     }
 
     /// Get the current observations in the rolling window for an index.
-    pub fn get_volatility_window(
-        env: Env,
-        index_id: u64,
-    ) -> Vec<volatility::VolObservation> {
+    pub fn get_volatility_window(env: Env, index_id: u64) -> Vec<volatility::VolObservation> {
         let idx = volatility::get_index(&env, index_id)
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::VolIndexNotFound));
         volatility::collect_window(&env, &idx)
@@ -8165,22 +8876,37 @@ a
         Self::require_not_paused(&env);
         creator.require_auth();
 
-        if !env.storage().instance()
+        if !env
+            .storage()
+            .instance()
             .get::<DataKey, bool>(&DataKey::TokenWhitelist(token_a.clone()))
             .unwrap_or(false)
         {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
-        if !env.storage().instance()
+        if !env
+            .storage()
+            .instance()
             .get::<DataKey, bool>(&DataKey::TokenWhitelist(token_b.clone()))
             .unwrap_or(false)
         {
             panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
         }
 
-        let fee = if fee_bps == 0 { amm::DEFAULT_FEE_BPS } else { fee_bps };
-        let (pool_id, shares) =
-            amm::pool::create_pool(&env, &creator, &token_a, &token_b, amount_a, amount_b, Some(fee));
+        let fee = if fee_bps == 0 {
+            amm::DEFAULT_FEE_BPS
+        } else {
+            fee_bps
+        };
+        let (pool_id, shares) = amm::pool::create_pool(
+            &env,
+            &creator,
+            &token_a,
+            &token_b,
+            amount_a,
+            amount_b,
+            Some(fee),
+        );
 
         env.events().publish(
             (symbol_short!("amm_new"),),
@@ -8211,14 +8937,24 @@ a
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::AmmPoolNotFound));
 
         let result = amm::pool::add_liquidity(
-            &env, pool_id, &provider,
-            amount_a_desired, amount_b_desired,
-            amount_a_min, amount_b_min,
+            &env,
+            pool_id,
+            &provider,
+            amount_a_desired,
+            amount_b_desired,
+            amount_a_min,
+            amount_b_min,
         );
 
         env.events().publish(
             (symbol_short!("amm_add"),),
-            (pool_id, provider, result.amount_a, result.amount_b, result.shares_minted),
+            (
+                pool_id,
+                provider,
+                result.amount_a,
+                result.amount_b,
+                result.shares_minted,
+            ),
         );
 
         result
@@ -8240,12 +8976,23 @@ a
         provider.require_auth();
 
         let result = amm::pool::remove_liquidity(
-            &env, pool_id, &provider, shares, amount_a_min, amount_b_min,
+            &env,
+            pool_id,
+            &provider,
+            shares,
+            amount_a_min,
+            amount_b_min,
         );
 
         env.events().publish(
             (symbol_short!("amm_rem"),),
-            (pool_id, provider, result.amount_a, result.amount_b, result.rewards_claimed),
+            (
+                pool_id,
+                provider,
+                result.amount_a,
+                result.amount_b,
+                result.rewards_claimed,
+            ),
         );
 
         result
@@ -8276,7 +9023,14 @@ a
 
         env.events().publish(
             (symbol_short!("amm_swap"),),
-            (pool_id, sender, token_in, amount_in, result.amount_out, result.fee_amount),
+            (
+                pool_id,
+                sender,
+                token_in,
+                amount_in,
+                result.amount_out,
+                result.fee_amount,
+            ),
         );
 
         result
@@ -8295,10 +9049,8 @@ a
 
         let claimed = amm::pool::claim_rewards(&env, pool_id, &provider);
 
-        env.events().publish(
-            (symbol_short!("amm_clm"),),
-            (pool_id, provider, claimed),
-        );
+        env.events()
+            .publish((symbol_short!("amm_clm"),), (pool_id, provider, claimed));
 
         claimed
     }
@@ -8314,7 +9066,8 @@ a
             panic_with_error!(&env, TipJarError::AmmFeeTooHigh);
         }
         amm::pool::set_pool_fee(&env, pool_id, fee_bps);
-        env.events().publish((symbol_short!("amm_fee"),), (pool_id, fee_bps));
+        env.events()
+            .publish((symbol_short!("amm_fee"),), (pool_id, fee_bps));
     }
 
     // ── AMM: queries ─────────────────────────────────────────────────────────
@@ -8330,22 +9083,12 @@ a
     }
 
     /// Get the expected output for a swap (view, no state change).
-    pub fn amm_get_amount_out(
-        env: Env,
-        pool_id: u64,
-        token_in: Address,
-        amount_in: i128,
-    ) -> i128 {
+    pub fn amm_get_amount_out(env: Env, pool_id: u64, token_in: Address, amount_in: i128) -> i128 {
         amm::swap::get_amount_out(&env, pool_id, &token_in, amount_in)
     }
 
     /// Get the required input for a desired output (view, no state change).
-    pub fn amm_get_amount_in(
-        env: Env,
-        pool_id: u64,
-        token_in: Address,
-        amount_out: i128,
-    ) -> i128 {
+    pub fn amm_get_amount_in(env: Env, pool_id: u64, token_in: Address, amount_out: i128) -> i128 {
         amm::swap::get_amount_in(&env, pool_id, &token_in, amount_out)
     }
 
@@ -8469,6 +9212,88 @@ a
         quadratic_funding::get_match_estimate(&env, round_id, &project)
     }
 
+    // ── Retroactive Public Goods Funding ─────────────────────────────────────
+
+    /// Creates a retroactive funding round.
+    ///
+    /// Transfers `reward_pool` tokens from `admin` into the contract.
+    /// `criteria` weights must sum to 10 000 bps.
+    /// Emits `("retro_new",)` with `(round_id, token, reward_pool, end_time)`.
+    pub fn retro_create_round(
+        env: Env,
+        admin: Address,
+        token: Address,
+        reward_pool: i128,
+        start_time: u64,
+        end_time: u64,
+        criteria: retroactive_funding::EvalCriteria,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        retroactive_funding::create_round(&env, &admin, &token, reward_pool, start_time, end_time, criteria)
+    }
+
+    /// Nominates a creator as eligible for rewards in a round. Admin only.
+    ///
+    /// Emits `("retro_nom",)` with `(round_id, creator)`.
+    pub fn retro_nominate_creator(env: Env, admin: Address, round_id: u64, creator: Address) {
+        Self::require_not_paused(&env);
+        retroactive_funding::nominate_creator(&env, &admin, round_id, &creator);
+    }
+
+    /// Casts a vote for a nominated creator in an active round.
+    ///
+    /// Each voter may vote once per round. Vote weight is derived from the voter's
+    /// own tip history (sqrt-weighted).
+    /// Emits `("retro_vot",)` with `(round_id, voter, creator, weight)`.
+    pub fn retro_cast_vote(env: Env, voter: Address, round_id: u64, creator: Address) {
+        Self::require_not_paused(&env);
+        retroactive_funding::cast_vote(&env, &voter, round_id, &creator);
+    }
+
+    /// Finalizes a round after the voting window closes. Admin only.
+    ///
+    /// Emits `("retro_fin",)` with `(round_id, total_votes)`.
+    pub fn retro_finalize_round(env: Env, admin: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        retroactive_funding::finalize_round(&env, &admin, round_id);
+    }
+
+    /// Computes a creator's impact score for a round.
+    ///
+    /// Score combines historical tips, tip count, and vote weight per `EvalCriteria`.
+    pub fn retro_compute_impact_score(env: Env, round_id: u64, creator: Address) -> i128 {
+        retroactive_funding::compute_impact_score(&env, round_id, &creator)
+    }
+
+    /// Claims the retroactive reward for a creator in a finalized round.
+    ///
+    /// Reward is proportional to the creator's impact score relative to all nominees.
+    /// Emits `("retro_clm",)` with `(round_id, creator, amount)`.
+    pub fn retro_claim_reward(env: Env, creator: Address, round_id: u64) -> i128 {
+        Self::require_not_paused(&env);
+        retroactive_funding::claim_reward(&env, &creator, round_id)
+    }
+
+    /// Returns a retroactive funding round by ID.
+    pub fn retro_get_round(env: Env, round_id: u64) -> retroactive_funding::RetroRound {
+        retroactive_funding::get_round(&env, round_id)
+    }
+
+    /// Returns the nominated creators for a round.
+    pub fn retro_get_round_creators(env: Env, round_id: u64) -> Vec<Address> {
+        retroactive_funding::get_round_creators(&env, round_id)
+    }
+
+    /// Returns the aggregated vote weight for a creator in a round.
+    pub fn retro_get_creator_votes(env: Env, round_id: u64, creator: Address) -> i128 {
+        retroactive_funding::get_creator_votes(&env, round_id, &creator)
+    }
+
+    /// Returns whether a voter has already voted in a round.
+    pub fn retro_has_voted(env: Env, round_id: u64, voter: Address) -> bool {
+        retroactive_funding::has_voted(&env, round_id, &voter)
+    }
+
     // ── Conviction Voting ────────────────────────────────────────────────────
 
     /// Initialize conviction voting system with default configuration.
@@ -8515,11 +9340,7 @@ a
     }
 
     /// Get effective voting power for a voter on a proposal (includes conviction multiplier).
-    pub fn get_conviction_voting_power(
-        env: Env,
-        proposal_id: u64,
-        voter: Address,
-    ) -> i128 {
+    pub fn get_conviction_voting_power(env: Env, proposal_id: u64, voter: Address) -> i128 {
         governance::conviction_integration::get_effective_voting_power(&env, proposal_id, &voter)
     }
 
@@ -8543,10 +9364,7 @@ a
     }
 
     /// Update conviction voting configuration (admin only).
-    pub fn update_conviction_config(
-        env: Env,
-        config: governance::conviction::ConvictionConfig,
-    ) {
+    pub fn update_conviction_config(env: Env, config: governance::conviction::ConvictionConfig) {
         Self::require_admin(&env);
         governance::conviction::update_conviction_config(&env, &config);
     }
@@ -8605,7 +9423,13 @@ a
         }
 
         let channel = payment_channel::open(
-            &env, &party_a, &party_b, &token, deposit_a, deposit_b, dispute_window,
+            &env,
+            &party_a,
+            &party_b,
+            &token,
+            deposit_a,
+            deposit_b,
+            dispute_window,
         );
 
         // CEI: state before external calls
@@ -8670,12 +9494,7 @@ a
     ///
     /// Distributes funds according to the latest agreed state and marks the channel closed.
     /// Emits `("ch_coop",)` with data `(party_a, party_b, token, balance_a, balance_b)`.
-    pub fn cooperative_close(
-        env: Env,
-        party_a: Address,
-        party_b: Address,
-        token: Address,
-    ) {
+    pub fn cooperative_close(env: Env, party_a: Address, party_b: Address, token: Address) {
         Self::require_not_paused(&env);
         party_a.require_auth();
         party_b.require_auth();
@@ -8828,6 +9647,796 @@ a
             .get(&DataKey::PaymentChannel(party_a, party_b, token))
     }
 
+    // ── tip state channels ───────────────────────────────────────────────────
+
+    /// Opens a tip state channel between `tipper` and `creator`.
+    ///
+    /// Transfers `deposit` from `tipper` into contract escrow.
+    /// Emits `("tch_open",)` with `(tipper, creator, token, deposit)`.
+    pub fn open_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        deposit: i128,
+        dispute_window: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+
+        if deposit <= 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDeposit);
+        }
+        if dispute_window == 0 {
+            panic_with_error!(&env, TipChannelError::InvalidDisputeWindow);
+        }
+
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, TipJarError::TokenNotWhitelisted);
+        }
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::open(&env, &tipper, &creator, &token, deposit, dispute_window);
+    }
+
+    /// Records an off-chain tip state update. Both parties must authorise.
+    ///
+    /// `new_tipped_amount` is the new cumulative total; `nonce` must be strictly greater.
+    /// Emits `("tch_tip",)` with `(tipper, creator, token, tip_amount, nonce)`.
+    pub fn record_channel_tip(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        new_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+        if nonce <= channel.nonce {
+            panic_with_error!(&env, TipChannelError::StaleNonce);
+        }
+        if new_tipped_amount < channel.tipped_amount {
+            panic_with_error!(&env, TipChannelError::TippedAmountDecreased);
+        }
+        if new_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::record_tip(&env, &tipper, &creator, &token, new_tipped_amount, nonce);
+    }
+
+    /// Cooperatively settles a tip channel. Both parties must authorise.
+    ///
+    /// Distributes `tipped_amount` to creator and remainder to tipper.
+    /// Emits `("tch_setl",)` with `(tipper, creator, token, to_creator, to_tipper)`.
+    pub fn settle_tip_channel(env: Env, tipper: Address, creator: Address, token: Address) {
+        Self::require_not_paused(&env);
+        tipper.require_auth();
+        creator.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if channel.status != state_channel::TipChannelStatus::Open {
+            panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+        }
+
+        state_channel::settle(&env, &tipper, &creator, &token);
+    }
+
+    /// Initiates or finalises a unilateral dispute close on a tip channel.
+    ///
+    /// First call: sets status to `Disputed`, records claimed state.
+    /// Second call (counterparty, within window): may submit a newer state.
+    /// After window: anyone may finalise.
+    /// Emits `("tch_disp",)` on initiation/update and `("tch_fin",)` on finalisation.
+    pub fn dispute_tip_channel(
+        env: Env,
+        caller: Address,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+        claimed_tipped_amount: i128,
+        nonce: u64,
+    ) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let key = DataKey::TipChannel(tipper.clone(), creator.clone(), token.clone());
+        if !env.storage().persistent().has(&key) {
+            panic_with_error!(&env, TipChannelError::ChannelNotFound);
+        }
+
+        let channel = state_channel::load(&env, &tipper, &creator, &token);
+        if caller != channel.tipper && caller != channel.creator {
+            panic_with_error!(&env, TipChannelError::NotChannelParty);
+        }
+        if channel.status == state_channel::TipChannelStatus::Settled {
+            panic_with_error!(&env, TipChannelError::AlreadySettled);
+        }
+        if claimed_tipped_amount < 0 || claimed_tipped_amount > channel.deposit {
+            panic_with_error!(&env, TipChannelError::ExceedsDeposit);
+        }
+
+        state_channel::dispute(
+            &env,
+            &caller,
+            &tipper,
+            &creator,
+            &token,
+            claimed_tipped_amount,
+            nonce,
+        );
+    }
+
+    /// Returns the tip state channel for `(tipper, creator, token)`.
+    pub fn get_tip_channel(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Option<state_channel::TipStateChannel> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TipChannel(tipper, creator, token))
+    }
+
+    /// Returns all recorded tip entries for a tip state channel.
+    pub fn get_tip_channel_tips(
+        env: Env,
+        tipper: Address,
+        creator: Address,
+        token: Address,
+    ) -> Vec<state_channel::ChannelTip> {
+        state_channel::get_channel_tips(&env, &tipper, &creator, &token)
+    }
+
+    // ── meta-transactions (gasless tipping) ──────────────────────────────────
+
+    /// Registers a trusted relayer for meta-transactions. Admin only.
+    ///
+    /// Emits `("mtx_reg",)` with `(relayer)`.
+    pub fn register_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerAlreadyRegistered);
+        }
+
+        meta_tx::register_relayer(&env, &relayer);
+
+        env.events()
+            .publish((symbol_short!("mtx_reg"),), (relayer,));
+    }
+
+    /// Removes a trusted relayer. Admin only.
+    ///
+    /// Emits `("mtx_rem",)` with `(relayer)`.
+    pub fn remove_meta_relayer(env: Env, admin: Address, relayer: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if !meta_tx::is_trusted_relayer(&env, &relayer) {
+            panic_with_error!(&env, MetaTxError::RelayerNotFound);
+        }
+
+        meta_tx::remove_relayer(&env, &relayer);
+
+        env.events()
+            .publish((symbol_short!("mtx_rem"),), (relayer,));
+    }
+
+    /// Executes a meta-transaction tip on behalf of a user.
+    ///
+    /// The relayer submits a signed `MetaTipRequest`. The contract verifies:
+    ///   - Relayer is trusted
+    ///   - Request has not expired
+    ///   - Nonce matches the stored per-sender nonce
+    ///   - Signature is valid
+    ///   - Request has not been replayed
+    ///
+    /// On success, executes the tip (or channel open) and increments the sender's nonce.
+    /// Returns the meta-tx record ID.
+    ///
+    /// Emits `("mtx_exec",)` with `(record_id, from, relayer, to, amount, nonce)`.
+    pub fn execute_meta_tip(env: Env, relayer: Address, request: meta_tx::MetaTipRequest) -> u64 {
+        Self::require_not_paused(&env);
+        relayer.require_auth();
+
+        // Validate amount
+        if request.amount <= 0 {
+            panic_with_error!(&env, MetaTxError::InvalidAmount);
+        }
+
+        // Validate token whitelist
+        let whitelisted: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenWhitelist(request.token.clone()))
+            .unwrap_or(false);
+        if !whitelisted {
+            panic_with_error!(&env, MetaTxError::TokenNotWhitelisted);
+        }
+
+        // Verify signature and replay protection
+        let hash = meta_tx::verify(&env, &relayer, &request);
+
+        // Execute the action based on request type
+        match request.action {
+            meta_tx::MetaTipAction::Tip => {
+                // Transfer tokens from `from` to contract
+                token::Client::new(&env, &request.token).transfer(
+                    &request.from,
+                    &env.current_contract_address(),
+                    &request.amount,
+                );
+
+                // Credit creator balance
+                let key = DataKey::CreatorBalance(request.to.clone(), request.token.clone());
+                let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&key, &(current + request.amount));
+
+                // Update creator total
+                let total_key = DataKey::CreatorTotal(request.to.clone(), request.token.clone());
+                let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+                env.storage()
+                    .persistent()
+                    .set(&total_key, &(total + request.amount));
+
+                // Emit tip event
+                env.events().publish(
+                    (symbol_short!("tip"),),
+                    (
+                        request.from.clone(),
+                        request.to.clone(),
+                        request.token.clone(),
+                        request.amount,
+                    ),
+                );
+            }
+            meta_tx::MetaTipAction::OpenChannel => {
+                // Open a tip state channel
+                let key = DataKey::TipChannel(
+                    request.from.clone(),
+                    request.to.clone(),
+                    request.token.clone(),
+                );
+                if env.storage().persistent().has(&key) {
+                    panic_with_error!(&env, TipChannelError::ChannelNotOpen);
+                }
+
+                // Default dispute window: 1 hour
+                let dispute_window = 3600u64;
+                state_channel::open(
+                    &env,
+                    &request.from,
+                    &request.to,
+                    &request.token,
+                    request.amount,
+                    dispute_window,
+                );
+            }
+        }
+
+        // Finalize: mark consumed, bump nonce, store record
+        meta_tx::finalize(&env, &relayer, &request, &hash)
+    }
+
+    /// Returns the current meta-transaction nonce for a sender.
+    pub fn get_meta_nonce(env: Env, sender: Address) -> u64 {
+        meta_tx::get_nonce(&env, &sender)
+    }
+
+    /// Returns whether a relayer is trusted for meta-transactions.
+    pub fn is_meta_relayer(env: Env, relayer: Address) -> bool {
+        meta_tx::is_trusted_relayer(&env, &relayer)
+    }
+
+    /// Returns a meta-transaction execution record by ID.
+    pub fn get_meta_record(env: Env, record_id: u64) -> Option<meta_tx::MetaTxRecord> {
+        meta_tx::get_record(&env, record_id)
+    }
+
+    // ── commit-reveal (fair auctions & voting) ───────────────────────────────
+
+    /// Creates a new commit-reveal round.
+    ///
+    /// Returns the round ID.
+    /// Emits `("cr_new",)` with `(round_id, creator, timestamp)`.
+    pub fn create_commit_reveal_round(
+        env: Env,
+        creator: Address,
+        round_type: commit_reveal::RoundType,
+        commit_duration: u64,
+        reveal_duration: u64,
+        description: String,
+        token: Option<Address>,
+        min_bid: i128,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        if commit_duration < commit_reveal::MIN_COMMIT_DURATION
+            || commit_duration > commit_reveal::MAX_COMMIT_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidCommitDuration);
+        }
+        if reveal_duration < commit_reveal::MIN_REVEAL_DURATION
+            || reveal_duration > commit_reveal::MAX_REVEAL_DURATION
+        {
+            panic_with_error!(&env, CommitRevealError::InvalidRevealDuration);
+        }
+
+        commit_reveal::create_round(
+            &env,
+            &creator,
+            round_type,
+            commit_duration,
+            reveal_duration,
+            description,
+            token,
+            min_bid,
+        )
+    }
+
+    /// Submits a commitment during the commit phase.
+    ///
+    /// `commitment_hash` should be SHA256(value || salt).
+    /// Emits `("cr_cmt",)` with `(round_id, participant, commitment_hash)`.
+    pub fn commit_to_round(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        commitment_hash: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_start {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotStarted);
+        }
+        if now >= round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseEnded);
+        }
+
+        let key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, CommitRevealError::AlreadyCommitted);
+        }
+
+        commit_reveal::commit(&env, round_id, &participant, commitment_hash);
+    }
+
+    /// Advances a round from Committing to Revealing status.
+    ///
+    /// Can be called by anyone once the commit phase has ended.
+    /// Emits `("cr_rvl",)` with `(round_id)`.
+    pub fn start_reveal_phase(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Committing {
+            panic_with_error!(&env, CommitRevealError::NotInCommitPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.commit_end {
+            panic_with_error!(&env, CommitRevealError::CommitPhaseNotEnded);
+        }
+
+        commit_reveal::start_reveal_phase(&env, round_id);
+    }
+
+    /// Reveals a commitment during the reveal phase.
+    ///
+    /// Verifies that `SHA256(value || salt) == commitment_hash`.
+    /// Emits `("cr_rvld",)` with `(round_id, participant, value)`.
+    pub fn reveal_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+        value: i128,
+        salt: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        participant.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now >= round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseEnded);
+        }
+
+        let commit_key = DataKey::CommitRevealCommitment(round_id, participant.clone());
+        let commitment: Option<commit_reveal::Commitment> =
+            env.storage().persistent().get(&commit_key);
+        if commitment.is_none() {
+            panic_with_error!(&env, CommitRevealError::NoCommitment);
+        }
+        let commitment = commitment.unwrap();
+
+        if commitment.revealed {
+            panic_with_error!(&env, CommitRevealError::AlreadyRevealed);
+        }
+
+        let computed = commit_reveal::compute_commitment(&env, value, &salt);
+        if computed != commitment.commitment_hash {
+            panic_with_error!(&env, CommitRevealError::InvalidReveal);
+        }
+
+        commit_reveal::reveal(&env, round_id, &participant, value, salt);
+    }
+
+    /// Finalizes a round after the reveal phase ends.
+    ///
+    /// For auctions: determines the winner (highest bid).
+    /// Can be called by anyone once the reveal phase has ended.
+    /// Emits `("cr_fin",)` with `(round_id, winner, winning_bid)`.
+    pub fn finalize_commit_reveal_round(env: Env, round_id: u64) {
+        Self::require_not_paused(&env);
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        if round.status != commit_reveal::RoundStatus::Revealing {
+            panic_with_error!(&env, CommitRevealError::NotInRevealPhase);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < round.reveal_end {
+            panic_with_error!(&env, CommitRevealError::RevealPhaseNotEnded);
+        }
+
+        commit_reveal::finalize_round(&env, round_id);
+    }
+
+    /// Cancels a round. Creator or admin only.
+    ///
+    /// Emits `("cr_cncl",)` with `(round_id)`.
+    pub fn cancel_commit_reveal_round(env: Env, caller: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let round = commit_reveal::get_round(&env, round_id);
+        if round.is_none() {
+            panic_with_error!(&env, CommitRevealError::RoundNotFound);
+        }
+        let round = round.unwrap();
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != round.creator && caller != admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        if round.status == commit_reveal::RoundStatus::Finalized
+            || round.status == commit_reveal::RoundStatus::Cancelled
+        {
+            panic_with_error!(&env, CommitRevealError::RoundNotActive);
+        }
+
+        commit_reveal::cancel_round(&env, round_id);
+    }
+
+    /// Returns a commit-reveal round by ID.
+    pub fn get_commit_reveal_round(
+        env: Env,
+        round_id: u64,
+    ) -> Option<commit_reveal::CommitRevealRound> {
+        commit_reveal::get_round(&env, round_id)
+    }
+
+    /// Returns a commitment for a participant in a round.
+    pub fn get_commitment(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Commitment> {
+        commit_reveal::get_commitment(&env, round_id, &participant)
+    }
+
+    /// Returns a reveal for a participant in a round.
+    pub fn get_reveal(
+        env: Env,
+        round_id: u64,
+        participant: Address,
+    ) -> Option<commit_reveal::Reveal> {
+        commit_reveal::get_reveal(&env, round_id, &participant)
+    }
+
+    /// Returns all round IDs created by a creator.
+    pub fn get_creator_commit_reveal_rounds(env: Env, creator: Address) -> Vec<u64> {
+        commit_reveal::get_creator_rounds(&env, &creator)
+    }
+
+    // ── zero-knowledge proofs (private tip verification) ─────────────────────
+
+    /// Registers a new ZK circuit verification key.
+    ///
+    /// Returns the circuit ID.
+    /// Emits `("zk_reg",)` with `(circuit_id, owner, vk_hash)`.
+    pub fn register_zk_circuit(
+        env: Env,
+        owner: Address,
+        circuit_type: zk_proof::CircuitType,
+        vk_hash: BytesN<32>,
+        description: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        zk_proof::register_circuit(&env, &owner, circuit_type, vk_hash, description)
+    }
+
+    /// Deactivates a ZK circuit. Owner only.
+    ///
+    /// Emits `("zk_deact",)` with `(circuit_id)`.
+    pub fn deactivate_zk_circuit(env: Env, owner: Address, circuit_id: u64) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if circuit.owner != owner {
+            panic_with_error!(&env, ZkProofError::NotCircuitOwner);
+        }
+
+        zk_proof::deactivate_circuit(&env, circuit_id);
+    }
+
+    /// Submits a zero-knowledge proof for verification.
+    ///
+    /// Returns the proof ID.
+    /// Emits `("zk_sub",)` with `(proof_id, prover, circuit_id, nullifier)`.
+    pub fn submit_zk_proof(
+        env: Env,
+        prover: Address,
+        circuit_id: u64,
+        proof_data: Bytes,
+        public_inputs: Vec<BytesN<32>>,
+        private_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+        metadata: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        prover.require_auth();
+
+        let circuit = zk_proof::get_circuit(&env, circuit_id);
+        if circuit.is_none() {
+            panic_with_error!(&env, ZkProofError::CircuitNotFound);
+        }
+        let circuit = circuit.unwrap();
+
+        if !circuit.active {
+            panic_with_error!(&env, ZkProofError::CircuitNotActive);
+        }
+
+        if proof_data.len() > zk_proof::MAX_PROOF_SIZE {
+            panic_with_error!(&env, ZkProofError::ProofTooLarge);
+        }
+
+        if public_inputs.len() > zk_proof::MAX_PUBLIC_INPUTS {
+            panic_with_error!(&env, ZkProofError::TooManyPublicInputs);
+        }
+
+        let nullifier_key = DataKey::ZkNullifier(nullifier.clone());
+        if env
+            .storage()
+            .persistent()
+            .get(&nullifier_key)
+            .unwrap_or(false)
+        {
+            panic_with_error!(&env, ZkProofError::NullifierUsed);
+        }
+
+        zk_proof::submit_proof(
+            &env,
+            &prover,
+            circuit_id,
+            proof_data,
+            public_inputs,
+            private_commitment,
+            nullifier,
+            metadata,
+        )
+    }
+
+    /// Verifies a submitted ZK proof. Admin only.
+    ///
+    /// In production, this would call a ZK verifier. For this implementation,
+    /// the admin manually marks proofs as valid/invalid.
+    /// Emits `("zk_ver",)` with `(proof_id, is_valid)`.
+    pub fn verify_zk_proof(env: Env, admin: Address, proof_id: u64, is_valid: bool) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Pending {
+            panic_with_error!(&env, ZkProofError::ProofNotPending);
+        }
+
+        zk_proof::verify_proof(&env, proof_id, is_valid);
+    }
+
+    /// Revokes a ZK proof. Admin only.
+    ///
+    /// Emits `("zk_rvk",)` with `(proof_id)`.
+    pub fn revoke_zk_proof(env: Env, admin: Address, proof_id: u64) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+
+        zk_proof::revoke_proof(&env, proof_id);
+    }
+
+    /// Creates a private tip using a ZK proof.
+    ///
+    /// Returns the private tip ID.
+    /// Emits `("zk_ptip",)` with `(tip_id, creator, proof_id)`.
+    pub fn create_zk_private_tip(
+        env: Env,
+        creator: Address,
+        proof_id: u64,
+        amount_commitment: BytesN<32>,
+        nullifier: BytesN<32>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let proof = zk_proof::get_proof(&env, proof_id);
+        if proof.is_none() {
+            panic_with_error!(&env, ZkProofError::ProofNotFound);
+        }
+        let proof = proof.unwrap();
+
+        if proof.status != zk_proof::ProofStatus::Verified {
+            panic_with_error!(&env, ZkProofError::ProofNotVerified);
+        }
+
+        if proof.nullifier != nullifier {
+            panic_with_error!(&env, ZkProofError::NullifierMismatch);
+        }
+
+        zk_proof::create_private_tip(&env, &creator, proof_id, amount_commitment, nullifier)
+    }
+
+    /// Claims/reveals a private tip. Creator only.
+    ///
+    /// Emits `("zk_clm",)` with `(tip_id, creator)`.
+    pub fn claim_zk_private_tip(env: Env, creator: Address, tip_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
+
+        let tip = zk_proof::get_private_tip(&env, tip_id);
+        if tip.is_none() {
+            panic_with_error!(&env, ZkProofError::PrivateTipNotFound);
+        }
+        let tip = tip.unwrap();
+
+        if tip.creator != creator {
+            panic_with_error!(&env, ZkProofError::NotTipCreator);
+        }
+
+        if tip.claimed {
+            panic_with_error!(&env, ZkProofError::AlreadyClaimed);
+        }
+
+        zk_proof::claim_private_tip(&env, tip_id);
+    }
+
+    /// Returns a ZK circuit by ID.
+    pub fn get_zk_circuit(env: Env, circuit_id: u64) -> Option<zk_proof::VerificationKey> {
+        zk_proof::get_circuit(&env, circuit_id)
+    }
+
+    /// Returns a ZK proof by ID.
+    pub fn get_zk_proof(env: Env, proof_id: u64) -> Option<zk_proof::ZkProof> {
+        zk_proof::get_proof(&env, proof_id)
+    }
+
+    /// Returns a private tip by ID.
+    pub fn get_zk_private_tip(env: Env, tip_id: u64) -> Option<zk_proof::PrivateTipProof> {
+        zk_proof::get_private_tip(&env, tip_id)
+    }
+
+    /// Returns all circuit IDs owned by an address.
+    pub fn get_owner_zk_circuits(env: Env, owner: Address) -> Vec<u64> {
+        zk_proof::get_owner_circuits(&env, &owner)
+    }
+
+    /// Returns all proof IDs submitted by a prover.
+    pub fn get_prover_zk_proofs(env: Env, prover: Address) -> Vec<u64> {
+        zk_proof::get_prover_proofs(&env, &prover)
+    }
+
+    /// Returns all private tip IDs for a creator.
+    pub fn get_creator_zk_private_tips(env: Env, creator: Address) -> Vec<u64> {
+        zk_proof::get_creator_private_tips(&env, &creator)
+    }
+
     // ── optimistic rollup ────────────────────────────────────────────────────
 
     /// Initialize the rollup with a designated sequencer.
@@ -8839,13 +10448,25 @@ a
         if admin != stored_admin {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
-        env.storage().instance().set(&DataKey::RollupSequencer, &sequencer);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupSequencer, &sequencer);
         env.storage().instance().set(&DataKey::RollupEnabled, &true);
-        env.storage().instance().set(&DataKey::RollupChallengePeriod, &rollup::CHALLENGE_PERIOD);
-        env.storage().instance().set(&DataKey::RollupBatchCounter, &0u64);
-        env.storage().instance().set(&DataKey::RollupPendingCount, &0u64);
-        env.storage().instance().set(&DataKey::RollupFinalizedCount, &0u64);
-        env.storage().instance().set(&DataKey::RollupChallengedCount, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupChallengePeriod, &rollup::CHALLENGE_PERIOD);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupBatchCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupPendingCount, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupFinalizedCount, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::RollupChallengedCount, &0u64);
         env.events().publish((symbol_short!("rl_init"),), sequencer);
     }
 
@@ -8862,14 +10483,26 @@ a
         total_amount: i128,
         tip_count: u32,
     ) -> u64 {
-        let enabled: bool = env.storage().instance().get(&DataKey::RollupEnabled).unwrap_or(false);
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupEnabled)
+            .unwrap_or(false);
         if !enabled {
             panic_with_error!(&env, TipJarError::Unauthorized);
         }
         if total_amount <= 0 {
             panic_with_error!(&env, TipJarError::InvalidAmount);
         }
-        rollup::batch::submit_batch(&env, &sequencer, state_root, creator, token, total_amount, tip_count)
+        rollup::batch::submit_batch(
+            &env,
+            &sequencer,
+            state_root,
+            creator,
+            token,
+            total_amount,
+            tip_count,
+        )
     }
 
     /// Finalize a rollup batch after the challenge period. Permissionless.
@@ -8896,107 +10529,376 @@ a
 
     /// Returns a rollup batch by ID.
     pub fn get_rollup_batch(env: Env, batch_id: u64) -> Option<rollup::RollupBatch> {
-        env.storage().persistent().get(&DataKey::RollupBatch(batch_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::RollupBatch(batch_id))
     }
 
     /// Returns the current rollup state summary.
     pub fn get_rollup_state(env: Env) -> rollup::RollupState {
-        let enabled: bool = env.storage().instance().get(&DataKey::RollupEnabled).unwrap_or(false);
-        let sequencer: Address = env.storage().instance().get(&DataKey::RollupSequencer)
+        let enabled: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupEnabled)
+            .unwrap_or(false);
+        let sequencer: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupSequencer)
             .unwrap_or_else(|| panic_with_error!(&env, TipJarError::Unauthorized));
-        let challenge_period: u64 = env.storage().instance()
-            .get(&DataKey::RollupChallengePeriod).unwrap_or(rollup::CHALLENGE_PERIOD);
-        let pending_batches: u64 = env.storage().instance().get(&DataKey::RollupPendingCount).unwrap_or(0);
-        let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
-        let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
-        rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
+        let challenge_period: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupChallengePeriod)
+            .unwrap_or(rollup::CHALLENGE_PERIOD);
+        let pending_batches: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupPendingCount)
+            .unwrap_or(0);
+        let finalized_batches: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupFinalizedCount)
+            .unwrap_or(0);
+        let challenged_batches: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RollupChallengedCount)
+            .unwrap_or(0);
+        rollup::RollupState {
+            enabled,
+            sequencer,
+            challenge_period,
+            pending_batches,
+            finalized_batches,
+            challenged_batches,
+        }
     }
 
-    // ── yield farming ─────────────────────────────────────────────────────────
+    // ── fractional ownership ─────────────────────────────────────────────────
 
-    /// Creates a new farming pool. Admin only.
-    ///
-    /// * `lp_token`         — LP token stakers must deposit.
-    /// * `reward_token`     — token distributed as rewards.
-    /// * `reward_rate_bps`  — annual reward rate in basis points (e.g. 2000 = 20 %).
-    /// * `lock_period`      — seconds stakers must wait before unstaking.
-    ///
-    /// Returns the new pool ID.
-    /// Emits `("farm_create",)` with `(pool_id, lp_token, reward_token, reward_rate_bps)`.
-    pub fn farm_create_pool(
+    /// Mint `total_supply` fractions for `creator`.
+    pub fn mint_fractions(
         env: Env,
-        admin: Address,
-        lp_token: Address,
-        reward_token: Address,
-        reward_rate_bps: u32,
-        lock_period: u64,
+        creator: Address,
+        total_supply: u64,
+        buyout_price_per_fraction: i128,
+    ) {
+        fractional_ownership::mint_fractions(
+            &env,
+            &creator,
+            total_supply,
+            buyout_price_per_fraction,
+        );
+    }
+
+    /// Record `amount` of revenue for `creator`'s fraction pool.
+    pub fn accrue_revenue(env: Env, creator: Address, amount: i128) {
+        fractional_ownership::accrue_revenue(&env, &creator, amount);
+    }
+
+    /// Claim accumulated revenue for `holder` in `creator`'s pool.
+    pub fn claim_fraction_revenue(env: Env, creator: Address, holder: Address) -> i128 {
+        fractional_ownership::claim_revenue(&env, &creator, &holder)
+    }
+
+    /// Transfer `amount` fractions from `from` to `to`.
+    pub fn transfer_fractions(env: Env, creator: Address, from: Address, to: Address, amount: u64) {
+        fractional_ownership::transfer_fractions(&env, &creator, &from, &to, amount);
+    }
+
+    /// Buy out all fractions not held by `buyer`. Returns total cost.
+    pub fn buyout_fractions(env: Env, creator: Address, buyer: Address) -> i128 {
+        fractional_ownership::buyout(&env, &creator, &buyer)
+    }
+
+    /// Returns the fraction pool for `creator`.
+    pub fn get_fraction_pool(
+        env: Env,
+        creator: Address,
+    ) -> Option<fractional_ownership::FractionPool> {
+        fractional_ownership::get_pool(&env, &creator)
+    }
+
+    /// Returns the fraction position for `holder` in `creator`'s pool.
+    pub fn get_fraction_position(
+        env: Env,
+        creator: Address,
+        holder: Address,
+    ) -> fractional_ownership::FractionPosition {
+        fractional_ownership::get_position(&env, &creator, &holder)
+    }
+
+    // ── royalty splits ───────────────────────────────────────────────────────
+
+    /// Create or replace a split configuration for `split_id`.
+    pub fn set_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::set_split(&env, &split_id, &owner, recipients);
+    }
+
+    /// Modify an existing split configuration (owner only).
+    pub fn modify_split(
+        env: Env,
+        split_id: Address,
+        owner: Address,
+        recipients: Vec<royalty::SplitRecipient>,
+    ) {
+        royalty::modify_split(&env, &split_id, &owner, recipients);
+    }
+
+    /// Distribute `amount` according to the split config for `split_id`.
+    pub fn distribute_split(env: Env, split_id: Address, amount: i128) -> i128 {
+        royalty::distribute(&env, &split_id, amount)
+    }
+
+    /// Returns the split config for `split_id`.
+    pub fn get_split(env: Env, split_id: Address) -> Option<royalty::SplitConfig> {
+        royalty::get_split(&env, &split_id)
+    }
+
+    /// Returns a split history entry by index.
+    pub fn get_split_history_entry(
+        env: Env,
+        split_id: Address,
+        index: u64,
+    ) -> Option<royalty::SplitHistoryEntry> {
+        royalty::get_history_entry(&env, &split_id, index)
+    }
+
+    /// Returns the total number of distribution history entries for `split_id`.
+    pub fn get_split_history_count(env: Env, split_id: Address) -> u64 {
+        royalty::get_history_count(&env, &split_id)
+    }
+
+    /// Returns the accumulated split balance for `recipient`.
+    pub fn get_split_balance(env: Env, recipient: Address) -> i128 {
+        royalty::get_balance(&env, &recipient)
+    }
+
+    // ── Cross-Contract Calls (#215) ──────────────────────────────────────────
+
+    /// Route a single cross-contract call.
+    ///
+    /// Returns the call ID.
+    pub fn cc_route_call(
+        env: Env,
+        caller: Address,
+        target: Address,
+        call_type: cross_contract::CallType,
+        args: soroban_sdk::Bytes,
     ) -> u64 {
-        Self::require_not_paused(&env);
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin {
-            panic_with_error!(&env, TipJarError::Unauthorized);
-        }
-        if reward_rate_bps == 0 {
-            panic_with_error!(&env, TipJarError::InvalidAmount);
-        }
-        let pool_id = farming::pool::create_pool(&env, &lp_token, &reward_token, reward_rate_bps, lock_period);
-        env.events().publish(
-            (symbol_short!("farm_crt"),),
-            (pool_id, lp_token, reward_token, reward_rate_bps),
-        );
-        pool_id
+        cross_contract::route_call(&env, &caller, &target, call_type, args)
     }
 
-    /// Stakes `amount` LP tokens into a farming pool.
+    /// Execute a batch of cross-contract calls.
     ///
-    /// Emits `("farm_stake",)` with `(staker, pool_id, amount)`.
-    pub fn farm_stake(env: Env, staker: Address, pool_id: u64, amount: i128) {
-        Self::require_not_paused(&env);
-        farming::pool::stake(&env, &staker, pool_id, amount);
-        env.events().publish(
-            (symbol_short!("farm_stk"),),
-            (staker, pool_id, amount),
-        );
-    }
-
-    /// Unstakes `amount` LP tokens from a farming pool after the lock period.
-    ///
-    /// Emits `("farm_unstake",)` with `(staker, pool_id, amount)`.
-    pub fn farm_unstake(env: Env, staker: Address, pool_id: u64, amount: i128) {
-        Self::require_not_paused(&env);
-        farming::pool::unstake(&env, &staker, pool_id, amount);
-        env.events().publish(
-            (symbol_short!("farm_ust"),),
-            (staker, pool_id, amount),
-        );
-    }
-
-    /// Harvests all accrued rewards from a farming pool. Returns the amount harvested.
-    ///
-    /// Emits `("farm_harvest",)` with `(staker, pool_id, rewards)`.
-    pub fn farm_harvest(env: Env, staker: Address, pool_id: u64) -> i128 {
-        Self::require_not_paused(&env);
-        let rewards = farming::pool::harvest(&env, &staker, pool_id);
-        env.events().publish(
-            (symbol_short!("farm_hrv"),),
-            (staker, pool_id, rewards),
-        );
-        rewards
-    }
-
-    /// Returns a farming pool by ID.
-    pub fn farm_get_pool(env: Env, pool_id: u64) -> Option<farming::FarmingPool> {
-        farming::pool::get_pool(&env, pool_id)
-    }
-
-    /// Returns a staker's position in a farming pool.
-    pub fn farm_get_position(
+    /// Returns the batch ID.
+    pub fn cc_route_batch(
         env: Env,
-        pool_id: u64,
-        staker: Address,
-    ) -> Option<farming::FarmingPosition> {
-        farming::pool::get_position(&env, pool_id, &staker)
+        caller: Address,
+        targets: Vec<Address>,
+        call_types: Vec<cross_contract::CallType>,
+        args_list: Vec<soroban_sdk::Bytes>,
+    ) -> u64 {
+        cross_contract::route_batch(&env, &caller, targets, call_types, args_list)
+    }
+
+    /// Get a cross-contract call record by ID.
+    pub fn cc_get_call(env: Env, call_id: u64) -> Option<cross_contract::CrossCall> {
+        cross_contract::get_call(&env, call_id)
+    }
+
+    /// Get a batch record by ID.
+    pub fn cc_get_batch(env: Env, batch_id: u64) -> Option<cross_contract::CallBatch> {
+        cross_contract::get_batch(&env, batch_id)
+    }
+
+    /// Get all call IDs initiated by a caller.
+    pub fn cc_get_caller_calls(env: Env, caller: Address) -> Vec<u64> {
+        cross_contract::get_caller_calls(&env, &caller)
+    }
+
+    // ── Tip Sharding (#269) ──────────────────────────────────────────────────
+
+    /// Initialize the sharding system.
+    pub fn shard_init(env: Env, admin: Address, shard_count: u32, auto_rebalance: bool) {
+        sharding::init_sharding(&env, &admin, shard_count, auto_rebalance)
+    }
+
+    /// Record a tip being processed by its assigned shard.
+    ///
+    /// Returns the shard ID.
+    pub fn shard_record_tip(env: Env, sender: Address, amount: i128, tip_id: u64) -> u32 {
+        sharding::record_tip_in_shard(&env, &sender, amount, tip_id)
+    }
+
+    /// Initiate a cross-shard transfer.
+    ///
+    /// Returns the transfer ID.
+    pub fn shard_cross_transfer(
+        env: Env,
+        from_shard: u32,
+        to_shard: u32,
+        tip_id: u64,
+        amount: i128,
+        token: Address,
+    ) -> u64 {
+        sharding::cross_shard_transfer(&env, from_shard, to_shard, tip_id, amount, &token)
+    }
+
+    /// Finalize a cross-shard transfer.
+    pub fn shard_finalize_transfer(env: Env, transfer_id: u64) {
+        sharding::finalize_transfer(&env, transfer_id)
+    }
+
+    /// Trigger a manual rebalance of shards.
+    pub fn shard_rebalance(env: Env, admin: Address) {
+        sharding::rebalance(&env, &admin)
+    }
+
+    /// Get the state of a specific shard.
+    pub fn shard_get_state(env: Env, shard_id: u32) -> sharding::ShardState {
+        sharding::get_shard(&env, shard_id)
+    }
+
+    /// Get the sharding configuration.
+    pub fn shard_get_config(env: Env) -> sharding::ShardConfig {
+        sharding::get_config_pub(&env)
+    }
+
+    /// Get the shard assignment for an address.
+    pub fn shard_get_assignment(env: Env, addr: Address) -> u32 {
+        sharding::get_assignment(&env, &addr)
+    }
+
+    /// Get a cross-shard transfer record.
+    pub fn shard_get_transfer(env: Env, transfer_id: u64) -> Option<sharding::ShardTransfer> {
+        sharding::get_transfer(&env, transfer_id)
+    }
+
+    // ── Tip Validity Proofs (#270) ───────────────────────────────────────────
+
+    /// Generate a validity proof for a tip.
+    ///
+    /// Returns the proof ID.
+    pub fn vp_generate(
+        env: Env,
+        sender: Address,
+        creator: Address,
+        token: Address,
+        amount: i128,
+        tip_id: u64,
+        witness: soroban_sdk::Bytes,
+    ) -> u64 {
+        validity_proof::generate_proof(&env, &sender, &creator, &token, amount, tip_id, witness)
+    }
+
+    /// Verify a validity proof.
+    ///
+    /// Returns true if valid.
+    pub fn vp_verify(env: Env, proof_id: u64) -> bool {
+        validity_proof::verify_proof(&env, proof_id)
+    }
+
+    /// Batch-verify multiple proofs.
+    ///
+    /// Returns the count of valid proofs.
+    pub fn vp_batch_verify(env: Env, proof_ids: Vec<u64>) -> u32 {
+        validity_proof::batch_verify(&env, proof_ids)
+    }
+
+    /// Aggregate multiple proofs into a single aggregate proof.
+    ///
+    /// Returns the aggregate ID.
+    pub fn vp_aggregate(env: Env, proof_ids: Vec<u64>) -> u64 {
+        validity_proof::aggregate_proofs(&env, proof_ids)
+    }
+
+    /// Revoke a proof.
+    pub fn vp_revoke(env: Env, admin: Address, proof_id: u64) {
+        validity_proof::revoke_proof(&env, &admin, proof_id)
+    }
+
+    /// Get a validity proof by ID.
+    pub fn vp_get_proof(env: Env, proof_id: u64) -> Option<validity_proof::TipProof> {
+        validity_proof::get_proof(&env, proof_id)
+    }
+
+    /// Get the proof ID for a given tip ID.
+    pub fn vp_get_proof_for_tip(env: Env, tip_id: u64) -> Option<u64> {
+        validity_proof::get_proof_for_tip(&env, tip_id)
+    }
+
+    /// Get an aggregated proof by ID.
+    pub fn vp_get_aggregate(env: Env, agg_id: u64) -> Option<validity_proof::AggregatedProof> {
+        validity_proof::get_aggregate(&env, agg_id)
+    }
+
+    // ── Tip Verkle Trees (#273) ──────────────────────────────────────────────
+
+    /// Create a new Verkle tree.
+    ///
+    /// Returns the tree ID.
+    pub fn vk_create_tree(env: Env, owner: Address) -> u64 {
+        verkle_tree::create_tree(&env, &owner)
+    }
+
+    /// Insert or update a leaf in a Verkle tree.
+    ///
+    /// Returns the new root commitment.
+    pub fn vk_update_leaf(
+        env: Env,
+        tree_id: u64,
+        creator: Address,
+        token: Address,
+        value: soroban_sdk::Bytes,
+    ) -> BytesN<32> {
+        verkle_tree::update_leaf(&env, tree_id, &creator, &token, value)
+    }
+
+    /// Generate a Verkle proof for a leaf.
+    ///
+    /// Returns the proof ID.
+    pub fn vk_generate_proof(env: Env, tree_id: u64, leaf_index: u32) -> u64 {
+        verkle_tree::generate_proof(&env, tree_id, leaf_index)
+    }
+
+    /// Verify a Verkle proof against the current tree root.
+    ///
+    /// Returns true if valid.
+    pub fn vk_verify_proof(env: Env, proof_id: u64) -> bool {
+        verkle_tree::verify_proof(&env, proof_id)
+    }
+
+    /// Get a Verkle tree by ID.
+    pub fn vk_get_tree(env: Env, tree_id: u64) -> Option<verkle_tree::VerkleTree> {
+        verkle_tree::get_tree(&env, tree_id)
+    }
+
+    /// Get a Verkle leaf by tree ID and index.
+    pub fn vk_get_leaf(env: Env, tree_id: u64, index: u32) -> Option<verkle_tree::VerkleLeaf> {
+        verkle_tree::get_leaf(&env, tree_id, index)
+    }
+
+    /// Get a Verkle proof by ID.
+    pub fn vk_get_proof(env: Env, proof_id: u64) -> Option<verkle_tree::VerkleProof> {
+        verkle_tree::get_proof(&env, proof_id)
+    }
+
+    /// Get all tree IDs owned by an address.
+    pub fn vk_get_owner_trees(env: Env, owner: Address) -> Vec<u64> {
+        verkle_tree::get_owner_trees(&env, &owner)
+    }
+
+    /// Deactivate a Verkle tree.
+    pub fn vk_deactivate_tree(env: Env, owner: Address, tree_id: u64) {
+        verkle_tree::deactivate_tree(&env, &owner, tree_id)
     }
 }
 
@@ -9022,27 +10924,175 @@ a
 
 
 
+    // ── Time-Lock Puzzles ────────────────────────────────────────────────────
 
+    /// Create a time-lock puzzle wrapping a tip.
+    ///
+    /// The caller must supply a `commitment` = SHA-256(secret XOR nonce) computed
+    /// off-chain. The `secret` and `nonce` are never stored on-chain; only the
+    /// commitment is persisted. The tip amount is transferred from `creator` to
+    /// the contract and held until the puzzle is solved.
+    ///
+    /// Returns the new puzzle ID.
+    pub fn create_time_lock_puzzle(
+        env: Env,
+        creator: Address,
+        recipient: Address,
+        token: Address,
+        amount: i128,
+        commitment: BytesN<32>,
+        unlock_time: u64,
+        difficulty: time_lock_puzzle::PuzzleDifficulty,
+        custom_iterations: Option<u64>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        creator.require_auth();
 
+        if amount <= 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        if unlock_time <= env.ledger().timestamp() {
+            panic_with_error!(&env, TipJarError::InvalidUnlockTime);
+        }
 
+        // Transfer tip amount from creator to contract.
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&creator, &env.current_contract_address(), &amount);
 
+        let iterations =
+            time_lock_puzzle::puzzle::calculate_iterations(difficulty, custom_iterations);
 
+        let id = time_lock_puzzle::next_puzzle_id(&env);
+        let puzzle = time_lock_puzzle::TimeLockPuzzle {
+            id,
+            creator: creator.clone(),
+            recipient: recipient.clone(),
+            token,
+            amount,
+            commitment,
+            iterations,
+            unlock_time,
+            created_at: env.ledger().timestamp(),
+            difficulty,
+            status: time_lock_puzzle::PuzzleStatus::Active,
+        };
 
+        time_lock_puzzle::save_puzzle(&env, &puzzle);
+        time_lock_puzzle::add_creator_puzzle(&env, &creator, id);
+        time_lock_puzzle::add_recipient_puzzle(&env, &recipient, id);
 
+        env.events().publish(
+            (symbol_short!("tlp_new"),),
+            (creator, recipient, id, amount, unlock_time),
+        );
 
+        id
+    }
 
+    /// Solve a time-lock puzzle and release the tip to the recipient.
+    ///
+    /// The solver supplies the original `secret` and `nonce` used to generate
+    /// the commitment. On success the tip is transferred to the recipient.
+    pub fn solve_time_lock_puzzle(env: Env, puzzle_id: u64, secret: BytesN<32>, nonce: BytesN<32>) {
+        Self::require_not_paused(&env);
 
+        let puzzle = time_lock_puzzle::get_puzzle(&env, puzzle_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PuzzleNotFound));
 
+        use time_lock_puzzle::solver::{solve_puzzle, SolveResult};
+        match solve_puzzle(&env, puzzle_id, &secret, &nonce) {
+            SolveResult::Success => {}
+            SolveResult::TooEarly => panic_with_error!(&env, TipJarError::PuzzleTooEarly),
+            SolveResult::WrongSolution => {
+                panic_with_error!(&env, TipJarError::PuzzleWrongSolution)
+            }
+            SolveResult::NotActive => match puzzle.status {
+                time_lock_puzzle::PuzzleStatus::Solved => {
+                    panic_with_error!(&env, TipJarError::PuzzleAlreadySolved)
+                }
+                time_lock_puzzle::PuzzleStatus::Cancelled => {
+                    panic_with_error!(&env, TipJarError::PuzzleCancelled)
+                }
+                _ => panic_with_error!(&env, TipJarError::PuzzleNotActive),
+            },
+        }
 
+        // Release tip to recipient.
+        let token_client = token::Client::new(&env, &puzzle.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &puzzle.recipient,
+            &puzzle.amount,
+        );
 
+        env.events().publish(
+            (symbol_short!("tlp_slv"),),
+            (puzzle_id, puzzle.recipient, puzzle.amount),
+        );
+    }
 
+    /// Cancel an active time-lock puzzle and refund the tip to the creator.
+    ///
+    /// Only the puzzle creator may cancel.
+    pub fn cancel_time_lock_puzzle(env: Env, creator: Address, puzzle_id: u64) {
+        Self::require_not_paused(&env);
+        creator.require_auth();
 
+        let puzzle = time_lock_puzzle::get_puzzle(&env, puzzle_id)
+            .unwrap_or_else(|| panic_with_error!(&env, TipJarError::PuzzleNotFound));
 
+        if puzzle.creator != creator {
+            panic_with_error!(&env, TipJarError::PuzzleUnauthorized);
+        }
 
+        if !time_lock_puzzle::solver::cancel_puzzle(&env, puzzle_id) {
+            match puzzle.status {
+                time_lock_puzzle::PuzzleStatus::Solved => {
+                    panic_with_error!(&env, TipJarError::PuzzleAlreadySolved)
+                }
+                _ => panic_with_error!(&env, TipJarError::PuzzleNotActive),
+            }
+        }
 
+        // Refund tip to creator.
+        let token_client = token::Client::new(&env, &puzzle.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &puzzle.creator,
+            &puzzle.amount,
+        );
 
+        env.events().publish(
+            (symbol_short!("tlp_cnl"),),
+            (puzzle_id, creator, puzzle.amount),
+        );
+    }
 
+    /// Get a time-lock puzzle record by ID.
+    pub fn get_time_lock_puzzle(
+        env: Env,
+        puzzle_id: u64,
+    ) -> Option<time_lock_puzzle::TimeLockPuzzle> {
+        time_lock_puzzle::get_puzzle(&env, puzzle_id)
+    }
 
+    /// Get the status of a time-lock puzzle.
+    pub fn get_puzzle_status(env: Env, puzzle_id: u64) -> Option<time_lock_puzzle::PuzzleStatus> {
+        time_lock_puzzle::solver::get_puzzle_status(&env, puzzle_id)
+    }
 
+    /// Check whether a puzzle's unlock time has been reached.
+    pub fn is_puzzle_unlocked(env: Env, puzzle_id: u64) -> bool {
+        time_lock_puzzle::solver::is_puzzle_unlocked(&env, puzzle_id)
+    }
 
+    /// List all puzzle IDs created by an address.
+    pub fn get_creator_puzzles(env: Env, creator: Address) -> Vec<u64> {
+        time_lock_puzzle::get_creator_puzzles(&env, &creator)
+    }
 
+    /// List all puzzle IDs targeting a recipient.
+    pub fn get_recipient_puzzles(env: Env, recipient: Address) -> Vec<u64> {
+        time_lock_puzzle::get_recipient_puzzles(&env, &recipient)
+    }
+}

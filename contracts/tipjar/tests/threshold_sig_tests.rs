@@ -4,8 +4,8 @@ extern crate std;
 
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, Vec};
 use tipjar::{
-    threshold_sig::{ThresholdTipStatus},
-    ThresholdError, TipJarContract, TipJarContractClient, TipJarError,
+    threshold_sig::ThresholdTipStatus, ThresholdError, TipJarContract, TipJarContractClient,
+    TipJarError,
 };
 
 fn setup() -> (Env, TipJarContractClient<'static>, Address, Address) {

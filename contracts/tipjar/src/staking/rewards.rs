@@ -93,11 +93,7 @@ pub fn calculate_impermanent_loss(
 }
 
 /// Calculate expected rewards for a given stake amount and duration
-pub fn calculate_expected_rewards(
-    env: &Env,
-    stake_amount: i128,
-    duration: u64,
-) -> i128 {
+pub fn calculate_expected_rewards(env: &Env, stake_amount: i128, duration: u64) -> i128 {
     let total_staked = super::get_total_staked(env);
     if total_staked == 0 {
         return 0;

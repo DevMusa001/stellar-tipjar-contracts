@@ -6,11 +6,7 @@ use super::{get_snapshot, get_snapshot_count, VolatilitySnapshot};
 
 /// Return up to `limit` most-recent snapshots for `index_id` in
 /// reverse-chronological order (newest first).
-pub fn get_recent_snapshots(
-    env: &Env,
-    index_id: u64,
-    limit: u32,
-) -> Vec<VolatilitySnapshot> {
+pub fn get_recent_snapshots(env: &Env, index_id: u64, limit: u32) -> Vec<VolatilitySnapshot> {
     let total = get_snapshot_count(env, index_id);
     let mut result: Vec<VolatilitySnapshot> = Vec::new(env);
 

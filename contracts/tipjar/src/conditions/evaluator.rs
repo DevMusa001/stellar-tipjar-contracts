@@ -96,7 +96,10 @@ mod tests {
 
         set_offchain_approval(&env, &condition_id, true);
 
-        assert!(evaluate_one(&env, &Condition::OffchainApproved(condition_id)));
+        assert!(evaluate_one(
+            &env,
+            &Condition::OffchainApproved(condition_id)
+        ));
     }
 
     #[test]

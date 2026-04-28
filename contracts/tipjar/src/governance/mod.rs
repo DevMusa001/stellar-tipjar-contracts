@@ -2,11 +2,11 @@
 //!
 //! This module provides on-chain governance functionality.
 
-pub mod proposals;
-pub mod voting;
-pub mod timelock;
 pub mod conviction;
 pub mod conviction_integration;
+pub mod proposals;
+pub mod timelock;
+pub mod voting;
 
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 

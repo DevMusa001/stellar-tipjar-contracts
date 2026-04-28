@@ -3,10 +3,16 @@
 //! Monitors and records synthetic token supply, collateral amounts,
 //! and collateralization ratios.
 
-use soroban_sdk::Env;
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
+use super::events::{emit_collateral_updated, emit_supply_updated};
 use super::types::SyntheticAsset;
-use super::events::{emit_supply_updated, emit_collateral_updated};
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
+use soroban_sdk::Env;
 
 /// Updates total supply after minting or redemption
 ///
@@ -19,7 +25,7 @@ use super::events::{emit_supply_updated, emit_collateral_updated};
 /// - Validates: Requirements 3.5, 5.4, 6.1, 6.4, 6.9
 pub fn update_supply(env: &Env, asset_id: u64, delta: i128) -> Result<(), TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -27,7 +33,8 @@ pub fn update_supply(env: &Env, asset_id: u64, delta: i128) -> Result<(), TipJar
         .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Update the total supply
-    asset.total_supply = asset.total_supply
+    asset.total_supply = asset
+        .total_supply
         .checked_add(delta)
         .ok_or(CoreError::InvalidAmount)?;
 
@@ -51,7 +58,7 @@ pub fn update_supply(env: &Env, asset_id: u64, delta: i128) -> Result<(), TipJar
 /// - Validates: Requirements 3.6, 5.6, 6.2, 6.5, 6.10, 7.6
 pub fn update_collateral(env: &Env, asset_id: u64, delta: i128) -> Result<(), TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -59,7 +66,8 @@ pub fn update_collateral(env: &Env, asset_id: u64, delta: i128) -> Result<(), Ti
         .ok_or(CreditError::SyntheticAssetNotFound)?;
 
     // Update the total collateral
-    asset.total_collateral = asset.total_collateral
+    asset.total_collateral = asset
+        .total_collateral
         .checked_add(delta)
         .ok_or(CoreError::InvalidAmount)?;
 
@@ -89,7 +97,7 @@ pub fn update_collateral(env: &Env, asset_id: u64, delta: i128) -> Result<(), Ti
 /// - Validates: Requirements 6.3, 6.8
 pub fn get_collateralization_ratio(env: &Env, asset_id: u64) -> Result<u32, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -103,7 +111,8 @@ pub fn get_collateralization_ratio(env: &Env, asset_id: u64) -> Result<u32, TipJ
     }
 
     // Calculate the synthetic value: total_supply * oracle_price
-    let synthetic_value = asset.total_supply
+    let synthetic_value = asset
+        .total_supply
         .checked_mul(asset.oracle_price)
         .ok_or(CoreError::InvalidAmount)?;
 
@@ -113,7 +122,8 @@ pub fn get_collateralization_ratio(env: &Env, asset_id: u64) -> Result<u32, TipJ
     }
 
     // Calculate ratio: (total_collateral / synthetic_value) * 10000
-    let ratio = asset.total_collateral
+    let ratio = asset
+        .total_collateral
         .checked_mul(10000)
         .ok_or(CoreError::InvalidAmount)?
         .checked_div(synthetic_value)
@@ -144,7 +154,7 @@ pub fn get_collateralization_ratio(env: &Env, asset_id: u64) -> Result<u32, TipJ
 /// - Validates: Requirements 6.6, 9.4
 pub fn get_total_supply(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -167,7 +177,7 @@ pub fn get_total_supply(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
 /// - Validates: Requirements 6.7, 9.4
 pub fn get_total_collateral(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -176,8 +186,3 @@ pub fn get_total_collateral(env: &Env, asset_id: u64) -> Result<i128, TipJarErro
 
     Ok(asset.total_collateral)
 }
-
-
-
-
-

@@ -217,7 +217,9 @@ pub fn verify_range_proof(
     // Fiat-Shamir verification: recompute challenge
     let mut challenge_data = soroban_sdk::Bytes::new(env);
     challenge_data.append(&soroban_sdk::Bytes::from(encrypted.ciphertext.clone()));
-    challenge_data.append(&soroban_sdk::Bytes::from(encrypted.randomness_commitment.clone()));
+    challenge_data.append(&soroban_sdk::Bytes::from(
+        encrypted.randomness_commitment.clone(),
+    ));
 
     let recomputed_challenge = env.crypto().sha256(&challenge_data);
 
@@ -250,7 +252,9 @@ pub fn verify_decryption_proof(
 ) -> Result<(), &'static str> {
     // Verify value commitment matches decrypted value
     let mut commitment_data = soroban_sdk::Bytes::new(env);
-    commitment_data.append(&soroban_sdk::Bytes::from(decrypted_value.to_le_bytes().to_vec()));
+    commitment_data.append(&soroban_sdk::Bytes::from(
+        decrypted_value.to_le_bytes().to_vec(),
+    ));
 
     let recomputed_commitment = env.crypto().sha256(&commitment_data);
 

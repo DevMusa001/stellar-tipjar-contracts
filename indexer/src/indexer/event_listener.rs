@@ -44,7 +44,11 @@ impl EventIndexer {
             max_retries,
             start_ledger,
         ));
-        Self { listener, pool, contract_id }
+        Self {
+            listener,
+            pool,
+            contract_id,
+        }
     }
 
     /// Starts the monitoring loop.
@@ -136,15 +140,24 @@ impl EventIndexer {
 /// Extracts (event_type, sender, recipient, amount) from parsed event data.
 fn classify(topic: &str, parsed: &Value) -> (String, Option<String>, Option<String>, Option<i64>) {
     let fields = parsed.get("fields").unwrap_or(parsed);
-    let sender    = fields.get("sender").and_then(|v| v.as_str()).map(str::to_owned);
-    let creator   = fields.get("creator").and_then(|v| v.as_str()).map(str::to_owned);
-    let amount    = fields.get("amount").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok())
+    let sender = fields
+        .get("sender")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let creator = fields
+        .get("creator")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let amount = fields
+        .get("amount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i64>().ok())
         .or_else(|| fields.get("amount").and_then(|v| v.as_i64()));
 
     let (event_type, recipient) = match topic {
-        "tip"      => ("tip".to_owned(),      creator),
-        "withdraw" => ("withdraw".to_owned(),  creator),
-        other      => (other.to_owned(),       creator),
+        "tip" => ("tip".to_owned(), creator),
+        "withdraw" => ("withdraw".to_owned(), creator),
+        other => (other.to_owned(), creator),
     };
 
     (event_type, sender, recipient, amount)

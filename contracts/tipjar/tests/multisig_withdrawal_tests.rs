@@ -39,7 +39,16 @@ fn setup() -> (
     let signer1 = Address::generate(&env);
     let signer2 = Address::generate(&env);
 
-    (env, client, admin, sender, Address::generate(&env), token_id, signer1, signer2)
+    (
+        env,
+        client,
+        admin,
+        sender,
+        Address::generate(&env),
+        token_id,
+        signer1,
+        signer2,
+    )
 }
 
 fn configure(

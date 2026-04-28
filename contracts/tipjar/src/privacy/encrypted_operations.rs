@@ -8,12 +8,12 @@
 
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
-use crate::DataKey;
 use super::homomorphic::{
     aggregate_encrypted_amounts, encrypt_amount, scalar_multiply_encrypted, verify_range_proof,
     EncryptedAmount, EncryptedBalance, RangeProof,
 };
 use super::key_management::{get_current_public_key, is_homomorphic_enabled};
+use crate::DataKey;
 
 /// Create an encrypted tip.
 ///

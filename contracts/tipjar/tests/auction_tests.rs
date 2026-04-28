@@ -2,10 +2,19 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::{Address as _, Ledger, BytesN as _}, Address, Env, BytesN, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, BytesN as _, Ledger},
+    Address, BytesN, Env, Vec,
+};
 use tipjar::{TipJarContract, TipJarContractClient, TipJarError};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 

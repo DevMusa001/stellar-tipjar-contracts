@@ -64,8 +64,8 @@ fn main() -> Result<()> {
 
     // Optional baseline comparison
     if let Some(baseline_path) = cli.baseline {
-        let baseline_json = std::fs::read_to_string(&baseline_path)
-            .context("failed to read baseline report")?;
+        let baseline_json =
+            std::fs::read_to_string(&baseline_path).context("failed to read baseline report")?;
         let baseline: GasReport = serde_json::from_str(&baseline_json)?;
         compare(&baseline, &report);
     }
@@ -77,14 +77,26 @@ fn main() -> Result<()> {
 fn parse_bench_output(output: &str) -> Vec<BenchResult> {
     let mut results = Vec::new();
     for line in output.lines() {
-        let Some(rest) = line.strip_prefix("[BENCH] ") else { continue };
+        let Some(rest) = line.strip_prefix("[BENCH] ") else {
+            continue;
+        };
         // Split on ": cpu="
-        let Some((func, metrics)) = rest.split_once(": cpu=") else { continue };
+        let Some((func, metrics)) = rest.split_once(": cpu=") else {
+            continue;
+        };
         // metrics = "12345 instructions, mem=6789 bytes"
-        let Some((cpu_part, mem_part)) = metrics.split_once(" instructions, mem=") else { continue };
-        let Some((mem_val, _)) = mem_part.split_once(" bytes") else { continue };
-        let Ok(cpu) = cpu_part.trim().parse::<u64>() else { continue };
-        let Ok(mem) = mem_val.trim().parse::<u64>() else { continue };
+        let Some((cpu_part, mem_part)) = metrics.split_once(" instructions, mem=") else {
+            continue;
+        };
+        let Some((mem_val, _)) = mem_part.split_once(" bytes") else {
+            continue;
+        };
+        let Ok(cpu) = cpu_part.trim().parse::<u64>() else {
+            continue;
+        };
+        let Ok(mem) = mem_val.trim().parse::<u64>() else {
+            continue;
+        };
         results.push(BenchResult {
             function: func.trim().to_string(),
             cpu_instructions: cpu,
@@ -96,7 +108,10 @@ fn parse_bench_output(output: &str) -> Vec<BenchResult> {
 
 fn compare(baseline: &GasReport, current: &GasReport) {
     println!("\n=== Gas Regression Report ===");
-    println!("{:<40} {:>15} {:>15} {:>10}", "Function", "Baseline CPU", "Current CPU", "Delta %");
+    println!(
+        "{:<40} {:>15} {:>15} {:>10}",
+        "Function", "Baseline CPU", "Current CPU", "Delta %"
+    );
     println!("{}", "-".repeat(85));
 
     let mut regression = false;
@@ -105,8 +120,14 @@ fn compare(baseline: &GasReport, current: &GasReport) {
             let delta_pct = (cur.cpu_instructions as f64 - base.cpu_instructions as f64)
                 / base.cpu_instructions as f64
                 * 100.0;
-            let flag = if delta_pct > 10.0 { " ⚠ REGRESSION" } else { "" };
-            if delta_pct > 10.0 { regression = true; }
+            let flag = if delta_pct > 10.0 {
+                " ⚠ REGRESSION"
+            } else {
+                ""
+            };
+            if delta_pct > 10.0 {
+                regression = true;
+            }
             println!(
                 "{:<40} {:>15} {:>15} {:>9.1}%{}",
                 cur.function, base.cpu_instructions, cur.cpu_instructions, delta_pct, flag

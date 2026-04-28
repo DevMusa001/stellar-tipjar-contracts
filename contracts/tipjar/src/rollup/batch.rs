@@ -135,6 +135,10 @@ pub fn finalize_batch(env: &Env, batch_id: u64) {
 
     env.events().publish(
         (symbol_short!("rl_fin"), batch_id),
-        (batch.creator.clone(), batch.token.clone(), batch.total_amount),
+        (
+            batch.creator.clone(),
+            batch.token.clone(),
+            batch.total_amount,
+        ),
     );
 }

@@ -241,9 +241,7 @@ pub fn get_config(env: &Env) -> FuturesConfig {
 }
 
 pub fn save_config(env: &Env, cfg: &FuturesConfig) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::FuturesConfig, cfg);
+    env.storage().persistent().set(&DataKey::FuturesConfig, cfg);
 }
 
 // ── Core logic ───────────────────────────────────────────────────────────────
@@ -259,11 +257,16 @@ pub fn open_long(
     settles_at: u64,
 ) -> u64 {
     let cfg = get_config(env);
-    let required_margin = margin::required_initial_margin(size, contract_price, cfg.initial_margin_bps);
+    let required_margin =
+        margin::required_initial_margin(size, contract_price, cfg.initial_margin_bps);
 
     // Transfer margin from long party to contract
     let token_client = token::Client::new(env, token);
-    token_client.transfer(long_party, &env.current_contract_address(), &required_margin);
+    token_client.transfer(
+        long_party,
+        &env.current_contract_address(),
+        &required_margin,
+    );
 
     let contract_id = next_id(env);
     let now = env.ledger().timestamp();
@@ -310,7 +313,11 @@ pub fn match_short(env: &Env, short_party: &Address, contract_id: u64) {
         margin::required_initial_margin(fc.size, fc.contract_price, fc.initial_margin_bps);
 
     let token_client = token::Client::new(env, &fc.token);
-    token_client.transfer(short_party, &env.current_contract_address(), &required_margin);
+    token_client.transfer(
+        short_party,
+        &env.current_contract_address(),
+        &required_margin,
+    );
 
     fc.short_party = Some(short_party.clone());
     fc.short_margin = required_margin;
@@ -331,8 +338,7 @@ pub fn update_mark_price(env: &Env, contract_id: u64, new_price: i128) {
     assert!(fc.status == FuturesStatus::Active, "contract not active");
 
     // Long P&L = (mark_price - contract_price) * size / PRICE_PRECISION
-    fc.long_unrealised_pnl =
-        (new_price - fc.contract_price) * fc.size / PRICE_PRECISION;
+    fc.long_unrealised_pnl = (new_price - fc.contract_price) * fc.size / PRICE_PRECISION;
     fc.mark_price = new_price;
     save_contract(env, &fc);
 }
@@ -392,7 +398,11 @@ pub fn liquidate(env: &Env, liquidator: &Address, contract_id: u64) -> i128 {
     // Return remaining margin to the liquidated party
     let remaining = liquidated_margin - penalty_actual;
     if remaining > 0 {
-        token_client.transfer(&env.current_contract_address(), &liquidated_party, &remaining);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &liquidated_party,
+            &remaining,
+        );
     }
 
     // Return the other side's margin to them

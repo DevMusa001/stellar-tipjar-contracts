@@ -117,4 +117,3 @@ pub enum BridgeDataKey {
     /// Bridge feature enabled flag.
     BridgeEnabled,
 }
-

@@ -11,9 +11,9 @@ use soroban_sdk::{contracttype, Address, Env};
 pub struct ConvictionVote {
     pub voter: Address,
     pub proposal_id: u64,
-    pub base_voting_power: i128,  // Initial voting power (token amount)
-    pub conviction_start: u64,    // When conviction started accumulating
-    pub last_updated: u64,        // Last time conviction was recalculated
+    pub base_voting_power: i128, // Initial voting power (token amount)
+    pub conviction_start: u64,   // When conviction started accumulating
+    pub last_updated: u64,       // Last time conviction was recalculated
     pub accumulated_conviction: i128, // Total conviction accumulated
 }
 
@@ -21,7 +21,7 @@ pub struct ConvictionVote {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConvictionConfig {
-    pub conviction_period: u64,   // Period to reach max conviction (seconds)
+    pub conviction_period: u64, // Period to reach max conviction (seconds)
     pub max_conviction_multiplier: i128, // Max voting power multiplier (e.g., 3_000_000 for 3x)
     pub conviction_decay_rate_bps: u32, // Decay rate in basis points per second when vote changes
     pub min_conviction_threshold: i128, // Minimum conviction to vote
@@ -31,10 +31,10 @@ pub struct ConvictionConfig {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConvictionDataKey {
-    ConvictionVote(u64, Address),      // proposal_id, voter
+    ConvictionVote(u64, Address), // proposal_id, voter
     ConvictionConfig,
-    ConvictionHistory(u64, Address),   // proposal_id, voter - historical records
-    VoterConvictionTotal(Address),     // Total conviction across all votes
+    ConvictionHistory(u64, Address), // proposal_id, voter - historical records
+    VoterConvictionTotal(Address),   // Total conviction across all votes
 }
 
 /// Default conviction voting constants
@@ -150,10 +150,7 @@ pub fn record_conviction_vote(
 
     // Update voter's total conviction
     let total_key = ConvictionDataKey::VoterConvictionTotal(voter.clone());
-    let current_total: i128 = env.storage()
-        .persistent()
-        .get(&total_key)
-        .unwrap_or(0);
+    let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
     env.storage()
         .persistent()
         .set(&total_key, &(current_total + base_voting_power));
@@ -181,16 +178,23 @@ pub fn update_conviction_vote(
     }
 
     let vote_key = ConvictionDataKey::ConvictionVote(proposal_id, voter.clone());
-    let mut conviction_vote = env.storage()
+    let mut conviction_vote = env
+        .storage()
         .persistent()
         .get(&vote_key)
         .expect("No conviction vote found");
 
     // Apply decay to accumulated conviction when vote changes
     let decay_rate = config.conviction_decay_rate_bps as i128;
-    let time_since_vote = env.ledger().timestamp().saturating_sub(conviction_vote.last_updated);
-    let decay_amount = conviction_vote.accumulated_conviction * decay_rate * time_since_vote / 10_000 / 1_000_000;
-    conviction_vote.accumulated_conviction = conviction_vote.accumulated_conviction.saturating_sub(decay_amount);
+    let time_since_vote = env
+        .ledger()
+        .timestamp()
+        .saturating_sub(conviction_vote.last_updated);
+    let decay_amount =
+        conviction_vote.accumulated_conviction * decay_rate * time_since_vote / 10_000 / 1_000_000;
+    conviction_vote.accumulated_conviction = conviction_vote
+        .accumulated_conviction
+        .saturating_sub(decay_amount);
 
     // Update vote
     conviction_vote.base_voting_power = new_base_voting_power;
@@ -200,28 +204,21 @@ pub fn update_conviction_vote(
 
     // Update voter's total conviction
     let total_key = ConvictionDataKey::VoterConvictionTotal(voter.clone());
-    let current_total: i128 = env.storage()
-        .persistent()
-        .get(&total_key)
-        .unwrap_or(0);
-    let old_power = env.storage()
+    let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
+    let old_power = env
+        .storage()
         .persistent()
         .get(&vote_key)
         .map(|v: ConvictionVote| v.base_voting_power)
         .unwrap_or(0);
     let new_total = current_total - old_power + new_base_voting_power;
-    env.storage()
-        .persistent()
-        .set(&total_key, &new_total);
+    env.storage().persistent().set(&total_key, &new_total);
 }
 
 /// Get total conviction for a voter across all proposals
 pub fn get_voter_total_conviction(env: &Env, voter: &Address) -> i128 {
     let total_key = ConvictionDataKey::VoterConvictionTotal(voter.clone());
-    env.storage()
-        .persistent()
-        .get(&total_key)
-        .unwrap_or(0)
+    env.storage().persistent().get(&total_key).unwrap_or(0)
 }
 
 /// Check if voter meets minimum conviction threshold for a proposal
@@ -241,8 +238,9 @@ pub fn get_proposal_threshold_with_conviction(env: &Env, voter: &Address) -> i12
 
     // Threshold is reduced based on conviction: threshold = base_threshold * (1 - conviction_bonus)
     // conviction_bonus = min(total_conviction / (base_threshold * 10), 0.5)
-    let conviction_bonus = (total_conviction * 1_000_000 / (config.min_conviction_threshold * 10)).min(500_000); // Max 50% reduction
-    
+    let conviction_bonus =
+        (total_conviction * 1_000_000 / (config.min_conviction_threshold * 10)).min(500_000); // Max 50% reduction
+
     config.min_conviction_threshold * (1_000_000 - conviction_bonus) / 1_000_000
 }
 
@@ -260,7 +258,11 @@ pub fn record_conviction_history(
 }
 
 /// Get conviction vote history
-pub fn get_conviction_history(env: &Env, proposal_id: u64, voter: &Address) -> Option<ConvictionVote> {
+pub fn get_conviction_history(
+    env: &Env,
+    proposal_id: u64,
+    voter: &Address,
+) -> Option<ConvictionVote> {
     let history_key = ConvictionDataKey::ConvictionHistory(proposal_id, voter.clone());
     env.storage().persistent().get(&history_key)
 }

@@ -9,8 +9,8 @@
 
 use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol};
 
-use crate::DataKey;
 use super::homomorphic::{HomomorphicConfig, HomomorphicPublicKey};
+use crate::DataKey;
 
 /// Key management configuration.
 #[contracttype]
@@ -88,9 +88,7 @@ pub fn initialize_homomorphic(
     // Initialize key history
     let mut history: Vec<HomomorphicPublicKey> = Vec::new(env);
     history.push_back(public_key);
-    env.storage()
-        .instance()
-        .set(&DataKey::KeyHistory, &history);
+    env.storage().instance().set(&DataKey::KeyHistory, &history);
 
     // Emit initialization event
     env.events().publish(
@@ -148,9 +146,7 @@ pub fn rotate_key(
         history.pop_front();
     }
 
-    env.storage()
-        .instance()
-        .set(&DataKey::KeyHistory, &history);
+    env.storage().instance().set(&DataKey::KeyHistory, &history);
 
     // Record rotation event
     let event = KeyRotationEvent {
@@ -234,10 +230,8 @@ pub fn enable_homomorphic(env: &Env, admin: &Address) -> Result<(), &'static str
         .instance()
         .set(&DataKey::HomomorphicConfig, &config);
 
-    env.events().publish(
-        (Symbol::new(env, "homomorphic_enabled"),),
-        (admin.clone(),),
-    );
+    env.events()
+        .publish((Symbol::new(env, "homomorphic_enabled"),), (admin.clone(),));
 
     Ok(())
 }

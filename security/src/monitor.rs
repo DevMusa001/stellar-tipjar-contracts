@@ -38,7 +38,12 @@ impl SecurityMonitor {
         circuit_breaker: CircuitBreaker,
         alerting: AlertingService,
     ) -> Self {
-        Self { rate_limiter, anomaly_detector, circuit_breaker, alerting }
+        Self {
+            rate_limiter,
+            anomaly_detector,
+            circuit_breaker,
+            alerting,
+        }
     }
 
     /// Evaluate a transaction against all security controls.
@@ -51,7 +56,9 @@ impl SecurityMonitor {
         // 2. Blacklist check
         if self.rate_limiter.is_blacklisted(&tx.sender) {
             self.alerting
-                .send_alert(Alert::Blacklisted { address: tx.sender.clone() })
+                .send_alert(Alert::Blacklisted {
+                    address: tx.sender.clone(),
+                })
                 .await;
             return SecurityCheck::Blocked;
         }
@@ -59,7 +66,9 @@ impl SecurityMonitor {
         // 3. Rate limiting
         if !self.rate_limiter.check(&tx.sender) {
             self.alerting
-                .send_alert(Alert::RateLimited { address: tx.sender.clone() })
+                .send_alert(Alert::RateLimited {
+                    address: tx.sender.clone(),
+                })
                 .await;
             return SecurityCheck::RateLimited;
         }

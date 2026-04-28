@@ -1,6 +1,6 @@
-use soroban_sdk::Env;
-use super::calculator::{BASE_FEE_BPS, MIN_FEE_BPS, MAX_FEE_BPS};
+use super::calculator::{BASE_FEE_BPS, MAX_FEE_BPS, MIN_FEE_BPS};
 use crate::DataKey;
+use soroban_sdk::Env;
 
 /// Network congestion level supplied by the caller or an oracle.
 ///
@@ -21,11 +21,13 @@ pub enum CongestionLevel {
 /// transparently via `get_current_fee_bps`.
 pub fn adjusted_fee_bps(env: &Env, congestion: CongestionLevel) -> u32 {
     let raw = match congestion {
-        CongestionLevel::Low    => BASE_FEE_BPS / 2,
+        CongestionLevel::Low => BASE_FEE_BPS / 2,
         CongestionLevel::Normal => BASE_FEE_BPS,
-        CongestionLevel::High   => BASE_FEE_BPS * 3 / 2,
+        CongestionLevel::High => BASE_FEE_BPS * 3 / 2,
     };
     let clamped = raw.clamp(MIN_FEE_BPS, MAX_FEE_BPS);
-    env.storage().instance().set(&DataKey::CurrentFeeBps, &clamped);
+    env.storage()
+        .instance()
+        .set(&DataKey::CurrentFeeBps, &clamped);
     clamped
 }

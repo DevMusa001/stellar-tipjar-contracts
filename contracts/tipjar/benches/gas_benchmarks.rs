@@ -117,7 +117,9 @@ fn gas_bench_tip_with_message() {
     let metadata = Map::new(&env);
 
     env.budget().reset_default();
-    client.tip_with_message(&sender, &creator, &token_id, &1_000_000, &message, &metadata);
+    client.tip_with_message(
+        &sender, &creator, &token_id, &1_000_000, &message, &metadata,
+    );
     let cpu = env.budget().cpu_instruction_count();
     let mem = env.budget().memory_bytes_count();
 

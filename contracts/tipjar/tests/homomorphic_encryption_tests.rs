@@ -297,7 +297,7 @@ fn test_multiply_bytes_by_scalar() {
 // Integration test examples (require full Soroban environment)
 
 #[test]
-#[ignore]  // Requires Soroban test environment
+#[ignore] // Requires Soroban test environment
 fn integration_test_full_encrypted_tip_flow() {
     // Full flow: init -> encrypt -> aggregate -> reveal
     // 1. Initialize homomorphic encryption
@@ -309,7 +309,7 @@ fn integration_test_full_encrypted_tip_flow() {
 }
 
 #[test]
-#[ignore]  // Requires Soroban test environment
+#[ignore] // Requires Soroban test environment
 fn integration_test_key_rotation_with_existing_tips() {
     // Test key rotation with existing encrypted tips
     // 1. Create tips with key v1
@@ -320,7 +320,7 @@ fn integration_test_key_rotation_with_existing_tips() {
 }
 
 #[test]
-#[ignore]  // Requires Soroban test environment
+#[ignore] // Requires Soroban test environment
 fn integration_test_concurrent_operations() {
     // Test concurrent encrypted operations
     // 1. Multiple creators creating tips simultaneously
@@ -330,7 +330,7 @@ fn integration_test_concurrent_operations() {
 }
 
 #[test]
-#[ignore]  // Requires Soroban test environment
+#[ignore] // Requires Soroban test environment
 fn integration_test_privacy_guarantees() {
     // Test privacy guarantees
     // 1. Verify ciphertexts don't leak information

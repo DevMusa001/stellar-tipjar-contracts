@@ -53,13 +53,13 @@ fn setup() -> (
 fn linear_params() -> CurveParams {
     CurveParams {
         curve_type: CurveType::Linear,
-        base_price: PRECISION,       // 1.0
-        slope: PRECISION / 10,       // 0.1 per token
+        base_price: PRECISION, // 1.0
+        slope: PRECISION / 10, // 0.1 per token
         k_param: 0,
         midpoint: 0,
         max_price: 0,
-        buy_fee_bps: 100,            // 1%
-        sell_fee_bps: 100,           // 1%
+        buy_fee_bps: 100,  // 1%
+        sell_fee_bps: 100, // 1%
     }
 }
 
@@ -67,7 +67,7 @@ fn exponential_params() -> CurveParams {
     CurveParams {
         curve_type: CurveType::Exponential,
         base_price: PRECISION,
-        slope: PRECISION / 100,      // 0.01 growth rate
+        slope: PRECISION / 100, // 0.01 growth rate
         k_param: 0,
         midpoint: 0,
         max_price: 0,
@@ -81,9 +81,9 @@ fn sigmoid_params() -> CurveParams {
         curve_type: CurveType::Sigmoid,
         base_price: PRECISION,
         slope: 0,
-        k_param: PRECISION / 10,     // k = 0.1
-        midpoint: 50 * PRECISION,    // inflection at supply = 50
-        max_price: 10 * PRECISION,   // max price = 10
+        k_param: PRECISION / 10,   // k = 0.1
+        midpoint: 50 * PRECISION,  // inflection at supply = 50
+        max_price: 10 * PRECISION, // max price = 10
         buy_fee_bps: 200,
         sell_fee_bps: 200,
     }
@@ -100,8 +100,11 @@ fn test_create_linear_curve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token,
-        &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     assert_eq!(curve_id, 1);
@@ -117,8 +120,11 @@ fn test_create_exponential_curve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token,
-        &exponential_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &exponential_params(),
+        &0i128,
     );
 
     let curve = client.bc_get_curve(&curve_id);
@@ -130,8 +136,11 @@ fn test_create_sigmoid_curve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token,
-        &sigmoid_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &sigmoid_params(),
+        &0i128,
     );
 
     let curve = client.bc_get_curve(&curve_id);
@@ -143,8 +152,11 @@ fn test_create_curve_with_initial_reserve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token,
-        &linear_params(), &500_000i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &500_000i128,
     );
 
     let curve = client.bc_get_curve(&curve_id);
@@ -158,9 +170,7 @@ fn test_create_curve_zero_base_price_fails() {
     let mut params = linear_params();
     params.base_price = 0;
 
-    let result = client.try_bc_create_curve(
-        &creator, &tip_token, &reserve_token, &params, &0i128,
-    );
+    let result = client.try_bc_create_curve(&creator, &tip_token, &reserve_token, &params, &0i128);
     assert_eq!(result, Err(Ok(TipJarError::BcInvalidParams)));
 }
 
@@ -171,9 +181,7 @@ fn test_create_curve_fee_too_high_fails() {
     let mut params = linear_params();
     params.buy_fee_bps = 2_000; // 20% — exceeds MAX_FEE_BPS
 
-    let result = client.try_bc_create_curve(
-        &creator, &tip_token, &reserve_token, &params, &0i128,
-    );
+    let result = client.try_bc_create_curve(&creator, &tip_token, &reserve_token, &params, &0i128);
     assert_eq!(result, Err(Ok(TipJarError::BcFeeTooHigh)));
 }
 
@@ -181,8 +189,20 @@ fn test_create_curve_fee_too_high_fails() {
 fn test_create_curve_increments_id() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
-    let id1 = client.bc_create_curve(&creator, &tip_token, &reserve_token, &linear_params(), &0i128);
-    let id2 = client.bc_create_curve(&creator, &tip_token, &reserve_token, &linear_params(), &0i128);
+    let id1 = client.bc_create_curve(
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
+    );
+    let id2 = client.bc_create_curve(
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
+    );
 
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
@@ -195,7 +215,11 @@ fn test_spot_price_at_zero_supply_equals_base_price() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let price = client.bc_get_spot_price(&curve_id);
@@ -207,7 +231,11 @@ fn test_spot_price_increases_after_buy() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let price_before = client.bc_get_spot_price(&curve_id);
@@ -225,7 +253,11 @@ fn test_spot_price_decreases_after_sell() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     // Buy first
@@ -236,8 +268,7 @@ fn test_spot_price_decreases_after_sell() {
     let price_after_buy = client.bc_get_spot_price(&curve_id);
 
     // Mint tip tokens to buyer so they can sell
-    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token)
-        .mint(&buyer, &(20 * PRECISION));
+    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token).mint(&buyer, &(20 * PRECISION));
     client.bc_sell(&buyer, &curve_id, &(10 * PRECISION), &0i128);
 
     let price_after_sell = client.bc_get_spot_price(&curve_id);
@@ -251,7 +282,11 @@ fn test_buy_updates_supply_and_reserve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -275,7 +310,11 @@ fn test_buy_zero_amount_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -288,7 +327,11 @@ fn test_buy_slippage_exceeded_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -304,7 +347,11 @@ fn test_buy_inactive_curve_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     client.bc_deactivate(&creator, &curve_id);
@@ -323,7 +370,11 @@ fn test_sell_reduces_supply_and_reserve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -332,8 +383,7 @@ fn test_sell_reduces_supply_and_reserve() {
     client.bc_buy(&buyer, &curve_id, &buy_amount, &5_000_000i128);
 
     // Give buyer tip tokens to sell
-    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token)
-        .mint(&buyer, &buy_amount);
+    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token).mint(&buyer, &buy_amount);
 
     let sell_amount = 5 * PRECISION;
     let result = client.bc_sell(&buyer, &curve_id, &sell_amount, &0i128);
@@ -350,15 +400,18 @@ fn test_sell_more_than_supply_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
     mint_reserve(&env, &reserve_token, &buyer, 2_000_000i128);
     client.bc_buy(&buyer, &curve_id, &(5 * PRECISION), &2_000_000i128);
 
-    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token)
-        .mint(&buyer, &(100 * PRECISION));
+    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token).mint(&buyer, &(100 * PRECISION));
 
     let result = client.try_bc_sell(&buyer, &curve_id, &(100 * PRECISION), &0i128);
     assert_eq!(result, Err(Ok(TipJarError::BcInsufficientSupply)));
@@ -369,15 +422,18 @@ fn test_sell_slippage_exceeded_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
     mint_reserve(&env, &reserve_token, &buyer, 5_000_000i128);
     client.bc_buy(&buyer, &curve_id, &(10 * PRECISION), &5_000_000i128);
 
-    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token)
-        .mint(&buyer, &(10 * PRECISION));
+    soroban_sdk::token::StellarAssetClient::new(&env, &tip_token).mint(&buyer, &(10 * PRECISION));
 
     // min_collateral set impossibly high
     let result = client.try_bc_sell(&buyer, &curve_id, &(5 * PRECISION), &999_999_999i128);
@@ -391,7 +447,11 @@ fn test_quote_buy_cost_positive() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let quote = client.bc_get_quote(&curve_id, &(10 * PRECISION));
@@ -405,7 +465,11 @@ fn test_quote_sell_return_after_buy() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -424,7 +488,11 @@ fn test_quote_zero_amount_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let result = client.try_bc_get_quote(&curve_id, &0i128);
@@ -438,7 +506,11 @@ fn test_fees_accumulate_on_buy() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -454,7 +526,11 @@ fn test_withdraw_fees_transfers_to_creator() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -476,7 +552,11 @@ fn test_withdraw_fees_no_fees_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let result = client.try_bc_withdraw_fees(&creator, &curve_id);
@@ -488,7 +568,11 @@ fn test_update_fees() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     client.bc_update_fees(&creator, &curve_id, &200u32, &300u32);
@@ -503,7 +587,11 @@ fn test_update_fees_too_high_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let result = client.try_bc_update_fees(&creator, &curve_id, &5_000u32, &0u32);
@@ -517,7 +605,11 @@ fn test_deactivate_curve() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     client.bc_deactivate(&creator, &curve_id);
@@ -531,7 +623,11 @@ fn test_deactivate_already_inactive_fails() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     client.bc_deactivate(&creator, &curve_id);
@@ -547,7 +643,11 @@ fn test_bc_buy_paused_fails() {
     let (env, client, admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &linear_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &linear_params(),
+        &0i128,
     );
 
     let reason = soroban_sdk::String::from_str(&env, "maintenance");
@@ -567,7 +667,11 @@ fn test_exponential_curve_buy() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &exponential_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &exponential_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);
@@ -583,7 +687,11 @@ fn test_sigmoid_curve_buy() {
     let (env, client, _admin, tip_token, reserve_token, creator) = setup();
 
     let curve_id = client.bc_create_curve(
-        &creator, &tip_token, &reserve_token, &sigmoid_params(), &0i128,
+        &creator,
+        &tip_token,
+        &reserve_token,
+        &sigmoid_params(),
+        &0i128,
     );
 
     let buyer = Address::generate(&env);

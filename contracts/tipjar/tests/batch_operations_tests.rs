@@ -2,12 +2,9 @@
 
 extern crate std;
 
-use soroban_sdk::{
-    testutils::Address as _,
-    Address, Env, Vec,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 use tipjar::{
-    BatchResult, TipJarContract, TipJarContractClient, TipJarError, TipOperation,
+    BatchResult, BatchStats, TipJarContract, TipJarContractClient, TipJarError, TipOperation,
     WithdrawOperation,
 };
 
@@ -36,8 +33,7 @@ fn setup() -> (
     client.add_token(&admin, &token_id);
 
     let tipper = Address::generate(&env);
-    soroban_sdk::token::StellarAssetClient::new(&env, &token_id)
-        .mint(&tipper, &10_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_id).mint(&tipper, &10_000_000i128);
 
     let creator = Address::generate(&env);
 
@@ -113,9 +109,21 @@ fn test_batch_tip_v2_multiple_recipients() {
     let creator3 = Address::generate(&env);
 
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator1.clone(), token: token.clone(), amount: 500i128 });
-    ops.push_back(TipOperation { creator: creator2.clone(), token: token.clone(), amount: 750i128 });
-    ops.push_back(TipOperation { creator: creator3.clone(), token: token.clone(), amount: 250i128 });
+    ops.push_back(TipOperation {
+        creator: creator1.clone(),
+        token: token.clone(),
+        amount: 500i128,
+    });
+    ops.push_back(TipOperation {
+        creator: creator2.clone(),
+        token: token.clone(),
+        amount: 750i128,
+    });
+    ops.push_back(TipOperation {
+        creator: creator3.clone(),
+        token: token.clone(),
+        amount: 250i128,
+    });
 
     let results = client.batch_tip_v2(&tipper, &ops);
 
@@ -136,14 +144,28 @@ fn test_batch_tip_v2_multiple_tokens() {
     let (env, client, _admin, tipper, creator, token1, token2) = setup_two_tokens();
 
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator.clone(), token: token1.clone(), amount: 1_000i128 });
-    ops.push_back(TipOperation { creator: creator.clone(), token: token2.clone(), amount: 2_000i128 });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token1.clone(),
+        amount: 1_000i128,
+    });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token2.clone(),
+        amount: 2_000i128,
+    });
 
     let results = client.batch_tip_v2(&tipper, &ops);
 
     assert_eq!(results.len(), 2);
-    assert_eq!(client.get_withdrawable_balance(&creator, &token1), 1_000i128);
-    assert_eq!(client.get_withdrawable_balance(&creator, &token2), 2_000i128);
+    assert_eq!(
+        client.get_withdrawable_balance(&creator, &token1),
+        1_000i128
+    );
+    assert_eq!(
+        client.get_withdrawable_balance(&creator, &token2),
+        2_000i128
+    );
 }
 
 #[test]
@@ -153,7 +175,11 @@ fn test_batch_tip_v2_returns_correct_indices() {
     let mut ops: Vec<TipOperation> = Vec::new(&env);
     for i in 0..5u32 {
         let c = Address::generate(&env);
-        ops.push_back(TipOperation { creator: c, token: token.clone(), amount: (i as i128 + 1) * 100 });
+        ops.push_back(TipOperation {
+            creator: c,
+            token: token.clone(),
+            amount: (i as i128 + 1) * 100,
+        });
     }
 
     let results = client.batch_tip_v2(&tipper, &ops);
@@ -198,7 +224,11 @@ fn test_batch_tip_v2_invalid_amount_fails() {
     let (env, client, _admin, tipper, creator, token) = setup();
 
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token.clone(),
+        amount: 0i128,
+    });
 
     let result = client.try_batch_tip_v2(&tipper, &ops);
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
@@ -211,11 +241,14 @@ fn test_batch_tip_v2_unwhitelisted_token_fails() {
     // Register a token but don't whitelist it.
     let bad_token_admin = Address::generate(&env);
     let bad_token = env.register_stellar_asset_contract(bad_token_admin.clone());
-    soroban_sdk::token::StellarAssetClient::new(&env, &bad_token)
-        .mint(&tipper, &1_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &bad_token).mint(&tipper, &1_000_000i128);
 
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator.clone(), token: bad_token.clone(), amount: 100i128 });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: bad_token.clone(),
+        amount: 100i128,
+    });
 
     let result = client.try_batch_tip_v2(&tipper, &ops);
     assert_eq!(result, Err(Ok(TipJarError::TokenNotWhitelisted)));
@@ -227,8 +260,16 @@ fn test_batch_tip_v2_atomic_all_or_nothing() {
 
     // Second operation has amount 0 — should fail atomically (no partial state).
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 500i128 });
-    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token.clone(),
+        amount: 500i128,
+    });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token.clone(),
+        amount: 0i128,
+    });
 
     let result = client.try_batch_tip_v2(&tipper, &ops);
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
@@ -245,7 +286,11 @@ fn test_batch_tip_v2_paused_fails() {
     client.pause(&admin, &reason);
 
     let mut ops: Vec<TipOperation> = Vec::new(&env);
-    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 100i128 });
+    ops.push_back(TipOperation {
+        creator: creator.clone(),
+        token: token.clone(),
+        amount: 100i128,
+    });
 
     let result = client.try_batch_tip_v2(&tipper, &ops);
     assert_eq!(result, Err(Ok(TipJarError::ContractPaused)));
@@ -277,7 +322,10 @@ fn test_batch_withdraw_single_token() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token, 5_000i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 3_000i128 });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 3_000i128,
+    });
 
     let results = client.batch_withdraw(&creator, &ops);
 
@@ -297,8 +345,14 @@ fn test_batch_withdraw_multiple_tokens() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token2, 6_000i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token1.clone(), amount: 4_000i128 });
-    ops.push_back(WithdrawOperation { token: token2.clone(), amount: 6_000i128 });
+    ops.push_back(WithdrawOperation {
+        token: token1.clone(),
+        amount: 4_000i128,
+    });
+    ops.push_back(WithdrawOperation {
+        token: token2.clone(),
+        amount: 6_000i128,
+    });
 
     let results = client.batch_withdraw(&creator, &ops);
 
@@ -319,8 +373,14 @@ fn test_batch_withdraw_partial_amount() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token, 10_000i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 3_000i128 });
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 2_000i128 });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 3_000i128,
+    });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 2_000i128,
+    });
 
     let results = client.batch_withdraw(&creator, &ops);
 
@@ -345,7 +405,10 @@ fn test_batch_withdraw_exceeds_max_size_fails() {
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
     for _ in 0..21u32 {
-        ops.push_back(WithdrawOperation { token: token.clone(), amount: 100i128 });
+        ops.push_back(WithdrawOperation {
+            token: token.clone(),
+            amount: 100i128,
+        });
     }
 
     let result = client.try_batch_withdraw(&creator, &ops);
@@ -358,7 +421,10 @@ fn test_batch_withdraw_invalid_amount_fails() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token, 1_000i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 0i128 });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 0i128,
+    });
 
     let result = client.try_batch_withdraw(&creator, &ops);
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
@@ -370,7 +436,10 @@ fn test_batch_withdraw_insufficient_balance_fails() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token, 500i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 1_000i128 });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 1_000i128,
+    });
 
     let result = client.try_batch_withdraw(&creator, &ops);
     assert_eq!(result, Err(Ok(TipJarError::InsufficientBalance)));
@@ -383,8 +452,14 @@ fn test_batch_withdraw_atomic_all_or_nothing() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token, 500i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 300i128 });
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 300i128 }); // 300+300 > 500
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 300i128,
+    });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 300i128,
+    }); // 300+300 > 500
 
     let result = client.try_batch_withdraw(&creator, &ops);
     assert_eq!(result, Err(Ok(TipJarError::InsufficientBalance)));
@@ -402,7 +477,10 @@ fn test_batch_withdraw_paused_fails() {
     client.pause(&admin, &reason);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token.clone(), amount: 500i128 });
+    ops.push_back(WithdrawOperation {
+        token: token.clone(),
+        amount: 500i128,
+    });
 
     let result = client.try_batch_withdraw(&creator, &ops);
     assert_eq!(result, Err(Ok(TipJarError::ContractPaused)));
@@ -415,8 +493,14 @@ fn test_batch_withdraw_returns_correct_indices() {
     seed_creator_balance(&env, &client, &tipper, &creator, &token2, 3_000i128);
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
-    ops.push_back(WithdrawOperation { token: token1.clone(), amount: 1_000i128 });
-    ops.push_back(WithdrawOperation { token: token2.clone(), amount: 1_000i128 });
+    ops.push_back(WithdrawOperation {
+        token: token1.clone(),
+        amount: 1_000i128,
+    });
+    ops.push_back(WithdrawOperation {
+        token: token2.clone(),
+        amount: 1_000i128,
+    });
 
     let results = client.batch_withdraw(&creator, &ops);
 
@@ -434,7 +518,11 @@ fn test_batch_tip_v2_max_batch_size_succeeds() {
     let mut ops: Vec<TipOperation> = Vec::new(&env);
     for _ in 0..20u32 {
         let c = Address::generate(&env);
-        ops.push_back(TipOperation { creator: c, token: token.clone(), amount: 100i128 });
+        ops.push_back(TipOperation {
+            creator: c,
+            token: token.clone(),
+            amount: 100i128,
+        });
     }
 
     let results = client.batch_tip_v2(&tipper, &ops);
@@ -449,10 +537,215 @@ fn test_batch_withdraw_max_batch_size_succeeds() {
 
     let mut ops: Vec<WithdrawOperation> = Vec::new(&env);
     for _ in 0..20u32 {
-        ops.push_back(WithdrawOperation { token: token.clone(), amount: 100i128 });
+        ops.push_back(WithdrawOperation {
+            token: token.clone(),
+            amount: 100i128,
+        });
     }
 
     let results = client.batch_withdraw(&creator, &ops);
     assert_eq!(results.len(), 20);
     assert_eq!(client.get_withdrawable_balance(&creator, &token), 0i128);
+}
+
+// ── batch_tip_multi ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_batch_tip_multi_all_valid() {
+    let (env, client, _admin, tipper, _creator, token) = setup();
+
+    let creator1 = Address::generate(&env);
+    let creator2 = Address::generate(&env);
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator1.clone(), token: token.clone(), amount: 300i128 });
+    ops.push_back(TipOperation { creator: creator2.clone(), token: token.clone(), amount: 700i128 });
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().success);
+    assert!(results.get(1).unwrap().success);
+    assert_eq!(client.get_withdrawable_balance(&creator1, &token), 300i128);
+    assert_eq!(client.get_withdrawable_balance(&creator2, &token), 700i128);
+}
+
+#[test]
+fn test_batch_tip_multi_partial_failure_invalid_amount() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 500i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 }); // invalid
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 200i128 });
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+
+    assert_eq!(results.len(), 3);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success); // skipped
+    assert!(results.get(2).unwrap().success);
+
+    // Only 500 + 200 = 700 credited.
+    assert_eq!(client.get_withdrawable_balance(&creator, &token), 700i128);
+}
+
+#[test]
+fn test_batch_tip_multi_partial_failure_unwhitelisted_token() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let bad_token_admin = Address::generate(&env);
+    let bad_token = env.register_stellar_asset_contract(bad_token_admin.clone());
+    soroban_sdk::token::StellarAssetClient::new(&env, &bad_token).mint(&tipper, &1_000_000i128);
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 400i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: bad_token.clone(), amount: 100i128 }); // unwhitelisted
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 100i128 });
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+
+    assert_eq!(results.len(), 3);
+    assert!(results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success); // skipped
+    assert!(results.get(2).unwrap().success);
+
+    assert_eq!(client.get_withdrawable_balance(&creator, &token), 500i128);
+    assert_eq!(client.get_withdrawable_balance(&creator, &bad_token), 0i128);
+}
+
+#[test]
+fn test_batch_tip_multi_all_invalid_returns_all_failed() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: -1i128 });
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+
+    assert_eq!(results.len(), 2);
+    assert!(!results.get(0).unwrap().success);
+    assert!(!results.get(1).unwrap().success);
+    assert_eq!(client.get_withdrawable_balance(&creator, &token), 0i128);
+}
+
+#[test]
+fn test_batch_tip_multi_empty_fails() {
+    let (env, client, _admin, tipper, _creator, _token) = setup();
+
+    let ops: Vec<TipOperation> = Vec::new(&env);
+    let result = client.try_batch_tip_multi(&tipper, &ops);
+    assert_eq!(result, Err(Ok(TipJarError::BatchSizeExceeded)));
+}
+
+#[test]
+fn test_batch_tip_multi_exceeds_limit_fails() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    for _ in 0..21u32 {
+        ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 10i128 });
+    }
+
+    let result = client.try_batch_tip_multi(&tipper, &ops);
+    assert_eq!(result, Err(Ok(TipJarError::BatchSizeExceeded)));
+}
+
+#[test]
+fn test_batch_tip_multi_max_batch_size_succeeds() {
+    let (env, client, _admin, tipper, _creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    for _ in 0..20u32 {
+        let c = Address::generate(&env);
+        ops.push_back(TipOperation { creator: c, token: token.clone(), amount: 10i128 });
+    }
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+    assert_eq!(results.len(), 20);
+    for i in 0..20u32 {
+        assert!(results.get(i).unwrap().success);
+    }
+}
+
+#[test]
+fn test_batch_tip_multi_paused_fails() {
+    let (env, client, admin, tipper, creator, token) = setup();
+
+    let reason = soroban_sdk::String::from_str(&env, "maintenance");
+    client.pause(&admin, &reason);
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 100i128 });
+
+    let result = client.try_batch_tip_multi(&tipper, &ops);
+    assert_eq!(result, Err(Ok(TipJarError::ContractPaused)));
+}
+
+// ── batch stats tracking ──────────────────────────────────────────────────────
+
+#[test]
+fn test_get_batch_stats_initial_zero() {
+    let (_env, client, _admin, _tipper, _creator, _token) = setup();
+
+    let stats = client.get_batch_stats();
+    assert_eq!(stats.total_batches, 0);
+    assert_eq!(stats.total_tips, 0);
+    assert_eq!(stats.total_amount, 0);
+    assert_eq!(stats.total_skipped, 0);
+}
+
+#[test]
+fn test_batch_stats_updated_after_batch_tip_multi() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 500i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 }); // skipped
+
+    client.batch_tip_multi(&tipper, &ops);
+
+    let stats = client.get_batch_stats();
+    assert_eq!(stats.total_batches, 1);
+    assert_eq!(stats.total_tips, 1);
+    assert_eq!(stats.total_amount, 500i128);
+    assert_eq!(stats.total_skipped, 1);
+}
+
+#[test]
+fn test_batch_stats_accumulate_across_multiple_batches() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops1: Vec<TipOperation> = Vec::new(&env);
+    ops1.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 300i128 });
+    ops1.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 200i128 });
+    client.batch_tip_multi(&tipper, &ops1);
+
+    let mut ops2: Vec<TipOperation> = Vec::new(&env);
+    ops2.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 100i128 });
+    ops2.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 }); // skipped
+    client.batch_tip_multi(&tipper, &ops2);
+
+    let stats = client.get_batch_stats();
+    assert_eq!(stats.total_batches, 2);
+    assert_eq!(stats.total_tips, 3);       // 2 + 1
+    assert_eq!(stats.total_amount, 600i128); // 500 + 100
+    assert_eq!(stats.total_skipped, 1);
+}
+
+#[test]
+fn test_batch_tip_multi_result_indices_correct() {
+    let (env, client, _admin, tipper, creator, token) = setup();
+
+    let mut ops: Vec<TipOperation> = Vec::new(&env);
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 100i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 0i128 });
+    ops.push_back(TipOperation { creator: creator.clone(), token: token.clone(), amount: 200i128 });
+
+    let results = client.batch_tip_multi(&tipper, &ops);
+
+    assert_eq!(results.get(0).unwrap().index, 0);
+    assert_eq!(results.get(1).unwrap().index, 1);
+    assert_eq!(results.get(2).unwrap().index, 2);
 }

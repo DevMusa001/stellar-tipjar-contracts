@@ -3,7 +3,7 @@
 use soroban_sdk::{token, Address, Env};
 
 use super::{
-    get_share, nav_per_share, save_fund, save_share, set_creator_alloc, get_creator_alloc,
+    get_creator_alloc, get_share, nav_per_share, save_fund, save_share, set_creator_alloc,
     INITIAL_SHARE_PRICE, MIN_DEPOSIT,
 };
 

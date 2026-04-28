@@ -38,11 +38,7 @@ pub fn long_is_liquidatable(fc: &FuturesContract) -> bool {
     if fc.status != FuturesStatus::Active {
         return false;
     }
-    let maint = required_maintenance_margin(
-        fc.size,
-        fc.contract_price,
-        fc.maintenance_margin_bps,
-    );
+    let maint = required_maintenance_margin(fc.size, fc.contract_price, fc.maintenance_margin_bps);
     long_effective_margin(fc) < maint
 }
 
@@ -51,11 +47,7 @@ pub fn short_is_liquidatable(fc: &FuturesContract) -> bool {
     if fc.status != FuturesStatus::Active || fc.short_party.is_none() {
         return false;
     }
-    let maint = required_maintenance_margin(
-        fc.size,
-        fc.contract_price,
-        fc.maintenance_margin_bps,
-    );
+    let maint = required_maintenance_margin(fc.size, fc.contract_price, fc.maintenance_margin_bps);
     short_effective_margin(fc) < maint
 }
 

@@ -3,12 +3,19 @@
 extern crate std;
 
 use soroban_sdk::{
+    symbol_short,
     testutils::{Address as _, Ledger},
-    Address, Env, symbol_short,
+    Address, Env,
 };
-use tipjar::{TipJarContract, TipJarContractClient, TipJarError, CircuitBreakerConfig};
+use tipjar::{CircuitBreakerConfig, TipJarContract, TipJarContractClient, TipJarError};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -55,11 +62,11 @@ fn test_circuit_breaker_single_tip_spike() {
     // Tip exceeding limit should trigger breaker and fail
     let result = client.try_tip(&sender, &creator, &token, &1001i128);
     assert!(result.is_err());
-    
+
     // Subsequent tip should fail due to halt even if within limit
     let result2 = client.try_tip(&sender, &creator, &token, &100i128);
     assert!(result2.is_err());
-    
+
     // Check state
     let state = client.get_circuit_breaker_state().unwrap();
     assert!(state.halted_until > env.ledger().timestamp());
@@ -82,11 +89,11 @@ fn test_circuit_breaker_volume_spike() {
 
     // Tip 1: 1500 (total 1500) - OK
     client.tip(&sender, &creator, &token, &1500i128);
-    
+
     // Tip 2: 600 (total 2100) - Should trigger volume breaker
     let result = client.try_tip(&sender, &creator, &token, &600i128);
     assert!(result.is_err());
-    
+
     let state = client.get_circuit_breaker_state().unwrap();
     assert!(state.halted_until > env.ledger().timestamp());
     assert_eq!(state.trigger_count, 1);
@@ -108,10 +115,10 @@ fn test_circuit_breaker_cooldown_expiry() {
 
     // Trigger breaker
     let _ = client.try_tip(&sender, &creator, &token, &1500i128);
-    
+
     // Advance time past cooldown (1800s)
     env.ledger().with_mut(|l| l.timestamp += 1801);
-    
+
     // Should succeed now
     client.tip(&sender, &creator, &token, &100i128);
     assert_eq!(client.get_withdrawable_balance(&creator, &token), 100i128);
@@ -133,13 +140,13 @@ fn test_manual_trigger_and_reset() {
 
     // Manual trigger
     client.trigger_circuit_breaker(&admin, &symbol_short!("manual"));
-    
+
     let result = client.try_tip(&sender, &creator, &token, &100i128);
     assert!(result.is_err());
-    
+
     // Manual reset
     client.reset_circuit_breaker(&admin);
-    
+
     client.tip(&sender, &creator, &token, &100i128);
     assert_eq!(client.get_withdrawable_balance(&creator, &token), 100i128);
 }

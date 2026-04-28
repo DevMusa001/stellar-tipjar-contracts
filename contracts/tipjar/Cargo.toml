@@ -90,7 +90,20 @@ path = "tests/payment_channel_tests.rs"
 name = "rollup_tests"
 path = "tests/rollup_tests.rs"
 
+
 [[test]]
-name = "yield_farming_tests"
-path = "tests/yield_farming_tests.rs"
+name = "fractional_ownership_tests"
+path = "tests/fractional_ownership_tests.rs"
+
+[[test]]
+name = "royalty_split_tests"
+path = "tests/royalty_split_tests.rs"
+
+[[test]]
+name = "derivatives_tests"
+path = "tests/derivatives_tests.rs"
+
+[[test]]
+name = "plasma_tests"
+path = "tests/plasma_tests.rs"
 

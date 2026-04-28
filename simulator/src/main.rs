@@ -55,7 +55,10 @@ fn main() -> Result<()> {
 
             for i in 0..tips {
                 let result = sim.simulate_tip(&sender, &creator, amount);
-                println!("  tip[{i}]: ok={} cpu={}", result.ok, result.cpu_instructions);
+                println!(
+                    "  tip[{i}]: ok={} cpu={}",
+                    result.ok, result.cpu_instructions
+                );
             }
 
             debugger::dump_balances(&sim, &[("creator", &creator)]);
@@ -63,7 +66,10 @@ fn main() -> Result<()> {
 
             println!("==> Simulating withdrawal");
             let result = sim.simulate_withdraw(&creator);
-            println!("  withdraw: ok={} cpu={}", result.ok, result.cpu_instructions);
+            println!(
+                "  withdraw: ok={} cpu={}",
+                result.ok, result.cpu_instructions
+            );
             debugger::dump_balances(&sim, &[("creator", &creator)]);
 
             if save {

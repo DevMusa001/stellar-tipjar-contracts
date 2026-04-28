@@ -2,10 +2,19 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
 use tipjar::{DataKey, Stream, StreamStatus, TipJarContract, TipJarContractClient, TipJarError};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -32,10 +41,7 @@ fn test_create_stream() {
     let (env, client, sender, creator, token) = setup();
 
     let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,  // 1 token per second
+        &sender, &creator, &token, &1i128,  // 1 token per second
         &100u64, // 100 seconds duration
     );
 
@@ -58,19 +64,13 @@ fn test_create_stream_invalid_rate() {
     let (env, client, sender, creator, token) = setup();
 
     let result = client.try_create_stream(
-        &sender,
-        &creator,
-        &token,
-        &0i128,  // Invalid rate
+        &sender, &creator, &token, &0i128, // Invalid rate
         &100u64,
     );
     assert_eq!(result, Err(Ok(TipJarError::InvalidStreamRate)));
 
     let result = client.try_create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1001i128,  // Exceeds maximum
+        &sender, &creator, &token, &1001i128, // Exceeds maximum
         &100u64,
     );
     assert_eq!(result, Err(Ok(TipJarError::StreamRateExceedsMaximum)));
@@ -81,11 +81,7 @@ fn test_create_stream_invalid_duration() {
     let (env, client, sender, creator, token) = setup();
 
     let result = client.try_create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &0u64,  // Invalid duration
+        &sender, &creator, &token, &1i128, &0u64, // Invalid duration
     );
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
 }
@@ -95,10 +91,7 @@ fn test_calculate_streamed_amount() {
     let (env, client, sender, creator, token) = setup();
 
     let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &2i128,  // 2 tokens per second
+        &sender, &creator, &token, &2i128,  // 2 tokens per second
         &100u64, // 100 seconds
     );
 
@@ -109,17 +102,17 @@ fn test_calculate_streamed_amount() {
     // After 10 seconds
     env.ledger().with_mut(|ledger| ledger.timestamp += 10);
     let streamed = client.get_streamed_amount(&stream_id);
-    assert_eq!(streamed, 20i128);  // 2 * 10
+    assert_eq!(streamed, 20i128); // 2 * 10
 
     // After 50 more seconds (total 60)
     env.ledger().with_mut(|ledger| ledger.timestamp += 50);
     let streamed = client.get_streamed_amount(&stream_id);
-    assert_eq!(streamed, 120i128);  // 2 * 60
+    assert_eq!(streamed, 120i128); // 2 * 60
 
     // After 50 more seconds (total 110, exceeds duration)
     env.ledger().with_mut(|ledger| ledger.timestamp += 50);
     let streamed = client.get_streamed_amount(&stream_id);
-    assert_eq!(streamed, 200i128);  // 2 * 100 (max)
+    assert_eq!(streamed, 200i128); // 2 * 100 (max)
 }
 
 #[test]
@@ -127,11 +120,8 @@ fn test_withdraw_streamed() {
     let (env, client, sender, creator, token) = setup();
 
     let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &3i128,   // 3 tokens per second
-        &100u64,  // 100 seconds
+        &sender, &creator, &token, &3i128,  // 3 tokens per second
+        &100u64, // 100 seconds
     );
 
     // After 20 seconds, 60 tokens should be available
@@ -167,13 +157,7 @@ fn test_withdraw_streamed() {
 fn test_withdraw_streamed_completed() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &2i128,
-        &50u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &2i128, &50u64);
 
     // Advance past end time
     env.ledger().with_mut(|ledger| ledger.timestamp += 60);
@@ -194,13 +178,7 @@ fn test_withdraw_streamed_completed() {
 fn test_cancel_stream() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &5i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &5i128, &100u64);
 
     // After 20 seconds, 100 tokens streamed (5 * 20)
     env.ledger().with_mut(|ledger| ledger.timestamp += 20);
@@ -226,13 +204,7 @@ fn test_cancel_stream() {
 fn test_stop_and_start_stream() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &4i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &4i128, &100u64);
 
     // After 10 seconds, 40 tokens
     env.ledger().with_mut(|ledger| ledger.timestamp += 10);
@@ -265,13 +237,7 @@ fn test_unauthorized_operations() {
     let (env, client, sender, creator, token) = setup();
     let other = Address::generate(&env);
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &1i128, &100u64);
 
     // Other user can't stop stream
     let result = client.try_stop_stream(&other, &stream_id);
@@ -296,13 +262,7 @@ fn test_unauthorized_operations() {
 fn test_withdraw_without_streamed_amount() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &1i128, &100u64);
 
     // Try to withdraw before stream starts (should fail)
     let result = client.try_withdraw_streamed(&creator, &stream_id);
@@ -355,13 +315,7 @@ fn test_cancel_nonexistent_stream() {
 fn test_stream_already_completed() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &10u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &1i128, &10u64);
 
     // Advance past end time
     env.ledger().with_mut(|ledger| ledger.timestamp += 20);
@@ -391,13 +345,7 @@ fn test_stream_rate_limit() {
 fn test_paused_stream_cannot_withdraw() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &5i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &5i128, &100u64);
 
     // Advance 10 seconds
     env.ledger().with_mut(|ledger| ledger.timestamp += 10);
@@ -416,13 +364,7 @@ fn test_paused_stream_cannot_withdraw() {
 fn test_double_cancel() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &1i128, &100u64);
 
     client.cancel_stream(&sender, &stream_id);
     let result = client.try_cancel_stream(&sender, &stream_id);
@@ -448,13 +390,7 @@ fn test_stream_token_whitelist() {
 fn test_stream_get_available_to_withdraw() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &10i128,
-        &100u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &10i128, &100u64);
 
     // Initially 0
     assert_eq!(client.get_available_to_withdraw(&stream_id), 0);
@@ -478,13 +414,7 @@ fn test_stream_get_available_to_withdraw() {
 fn test_stream_completed_no_more_withdrawals() {
     let (env, client, sender, creator, token) = setup();
 
-    let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &1i128,
-        &10u64,
-    );
+    let stream_id = client.create_stream(&sender, &creator, &token, &1i128, &10u64);
 
     // Advance past end
     env.ledger().with_mut(|ledger| ledger.timestamp += 20);
@@ -513,11 +443,7 @@ fn test_stream_duration_accurate() {
     let (env, client, sender, creator, token) = setup();
 
     let stream_id = client.create_stream(
-        &sender,
-        &creator,
-        &token,
-        &10i128,
-        &300u64, // 5 minutes
+        &sender, &creator, &token, &10i128, &300u64, // 5 minutes
     );
 
     let stream = client.get_stream(&stream_id).unwrap();

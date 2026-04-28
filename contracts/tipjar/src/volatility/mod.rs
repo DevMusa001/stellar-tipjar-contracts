@@ -123,9 +123,7 @@ pub struct VolatilityConfig {
 // ── Storage helpers ──────────────────────────────────────────────────────────
 
 pub fn get_index(env: &Env, index_id: u64) -> Option<VolatilityIndex> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::VolIndex(index_id))
+    env.storage().persistent().get(&DataKey::VolIndex(index_id))
 }
 
 pub fn save_index(env: &Env, idx: &VolatilityIndex) {
@@ -166,9 +164,10 @@ pub fn get_snapshot(env: &Env, index_id: u64, seq: u64) -> Option<VolatilitySnap
 }
 
 pub fn save_snapshot(env: &Env, snap: &VolatilitySnapshot) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::VolSnapshot(snap.index_id, snap.snapshot_seq), snap);
+    env.storage().persistent().set(
+        &DataKey::VolSnapshot(snap.index_id, snap.snapshot_seq),
+        snap,
+    );
 }
 
 pub fn get_snapshot_count(env: &Env, index_id: u64) -> u64 {
@@ -250,12 +249,7 @@ pub fn collect_window(env: &Env, idx: &VolatilityIndex) -> Vec<VolObservation> {
 
 /// Create a new volatility index for a (creator, token) pair.
 /// Returns the new index ID.
-pub fn create_index(
-    env: &Env,
-    creator: &Address,
-    token: &Address,
-    window_size: u32,
-) -> u64 {
+pub fn create_index(env: &Env, creator: &Address, token: &Address, window_size: u32) -> u64 {
     let index_id = next_id(env);
     let now = env.ledger().timestamp();
 
@@ -294,9 +288,21 @@ pub fn record_observation(env: &Env, index_id: u64, amount: i128) -> VolatilityI
 
     // Write new observation into ring buffer
     let next_slot = (idx.write_index + 1) % idx.window_size;
-    let write_slot = if idx.observation_count == 0 { 0 } else { next_slot };
+    let write_slot = if idx.observation_count == 0 {
+        0
+    } else {
+        next_slot
+    };
 
-    set_observation(env, index_id, write_slot, &VolObservation { timestamp: now, amount });
+    set_observation(
+        env,
+        index_id,
+        write_slot,
+        &VolObservation {
+            timestamp: now,
+            amount,
+        },
+    );
 
     idx.write_index = write_slot;
     idx.observation_count += 1;

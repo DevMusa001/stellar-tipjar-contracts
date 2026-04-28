@@ -83,9 +83,7 @@ pub const INITIAL_SHARE_PRICE: i128 = 1_000_000; // 6 decimal precision
 
 /// Get a fund by ID.
 pub fn get_fund(env: &Env, fund_id: u64) -> Option<IndexFund> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Fund(fund_id))
+    env.storage().persistent().get(&DataKey::Fund(fund_id))
 }
 
 /// Persist a fund record.
@@ -103,9 +101,7 @@ pub fn next_fund_id(env: &Env) -> u64 {
         .get(&DataKey::FundCounter)
         .unwrap_or(0)
         + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::FundCounter, &id);
+    env.storage().persistent().set(&DataKey::FundCounter, &id);
     id
 }
 
@@ -124,9 +120,10 @@ pub fn get_share(env: &Env, fund_id: u64, holder: &Address) -> FundShare {
 
 /// Persist a user's share position.
 pub fn save_share(env: &Env, share: &FundShare) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::FundShare(share.fund_id, share.holder.clone()), share);
+    env.storage().persistent().set(
+        &DataKey::FundShare(share.fund_id, share.holder.clone()),
+        share,
+    );
 }
 
 /// Get creator allocation within a fund (token amount allocated to that creator).

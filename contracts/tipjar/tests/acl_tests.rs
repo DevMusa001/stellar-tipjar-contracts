@@ -2,9 +2,9 @@
 
 extern crate std;
 
-use soroban_sdk::{String, Address, Env};
+use soroban_sdk::{Address, Env, String};
 use tipjar::{
-    acl::{LEVEL_ADMIN, LEVEL_MODERATOR, LEVEL_CREATOR},
+    acl::{LEVEL_ADMIN, LEVEL_CREATOR, LEVEL_MODERATOR},
     TipJarContract, TipJarContractClient,
 };
 
@@ -153,7 +153,9 @@ fn test_change_entry_records_subject() {
 
     client.acl_assign_role(&admin, &user, &String::from_str(&env, "viewer"));
 
-    let entry = client.acl_get_change_entry(&0u64).expect("entry should exist");
+    let entry = client
+        .acl_get_change_entry(&0u64)
+        .expect("entry should exist");
     assert_eq!(entry.subject, user);
 }
 

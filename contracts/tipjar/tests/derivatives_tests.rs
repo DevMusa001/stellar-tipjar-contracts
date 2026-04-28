@@ -15,18 +15,14 @@ use soroban_sdk::{
     token, Address, Env,
 };
 use tipjar::{
-    derivatives::{
-        self, DerivativeKind, DerivativeStatus,
-        PRICE_PRECISION,
-    },
     derivatives::pricing::{
-        black_scholes, futures_fair_value, swap_fair_value, PricingInput,
-        isqrt, norm_cdf,
+        black_scholes, futures_fair_value, isqrt, norm_cdf, swap_fair_value, PricingInput,
     },
     derivatives::risk::{
-        check_margin_health, portfolio_health, find_liquidatable, HEALTH_PRECISION,
+        check_margin_health, find_liquidatable, portfolio_health, HEALTH_PRECISION,
     },
     derivatives::settlement,
+    derivatives::{self, DerivativeKind, DerivativeStatus, PRICE_PRECISION},
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -46,21 +42,31 @@ fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
 fn test_isqrt_basic() {
     assert_eq!(isqrt(0), 0);
     assert_eq!(isqrt(PRICE_PRECISION * PRICE_PRECISION), PRICE_PRECISION);
-    assert_eq!(isqrt(4 * PRICE_PRECISION * PRICE_PRECISION), 2 * PRICE_PRECISION);
+    assert_eq!(
+        isqrt(4 * PRICE_PRECISION * PRICE_PRECISION),
+        2 * PRICE_PRECISION
+    );
 }
 
 #[test]
 fn test_norm_cdf_at_zero() {
     let p = norm_cdf(0);
     // N(0) ≈ 0.5
-    assert!((p - 500_000).abs() < 5_000, "N(0) should be ~0.5, got {}", p);
+    assert!(
+        (p - 500_000).abs() < 5_000,
+        "N(0) should be ~0.5, got {}",
+        p
+    );
 }
 
 #[test]
 fn test_norm_cdf_symmetry() {
     let p1 = norm_cdf(PRICE_PRECISION);
     let p_neg1 = norm_cdf(-PRICE_PRECISION);
-    assert!((p1 + p_neg1 - PRICE_PRECISION).abs() < 10_000, "symmetry failed");
+    assert!(
+        (p1 + p_neg1 - PRICE_PRECISION).abs() < 10_000,
+        "symmetry failed"
+    );
 }
 
 #[test]
@@ -75,7 +81,11 @@ fn test_black_scholes_atm() {
     let prices = black_scholes(&input).expect("should price ATM option");
     // ATM call and put should be close
     let diff = (prices.call - prices.put).abs();
-    assert!(diff < PRICE_PRECISION / 10, "ATM call/put diff too large: {}", diff);
+    assert!(
+        diff < PRICE_PRECISION / 10,
+        "ATM call/put diff too large: {}",
+        diff
+    );
     assert!(prices.call > 0, "call should be positive");
     assert!(prices.put > 0, "put should be positive");
 }
@@ -83,24 +93,36 @@ fn test_black_scholes_atm() {
 #[test]
 fn test_black_scholes_deep_itm_call() {
     let input = PricingInput {
-        spot: 2 * PRICE_PRECISION,  // S = 2.0
-        strike: PRICE_PRECISION,    // K = 1.0
+        spot: 2 * PRICE_PRECISION, // S = 2.0
+        strike: PRICE_PRECISION,   // K = 1.0
         time_to_expiry_secs: 86_400 * 30,
         volatility_bps: 3_000,
         risk_free_rate_bps: 500,
     };
     let prices = black_scholes(&input).expect("should price deep ITM call");
     // Deep ITM call ≈ S - K = 1.0
-    assert!(prices.call > PRICE_PRECISION * 9 / 10, "deep ITM call should be close to intrinsic");
+    assert!(
+        prices.call > PRICE_PRECISION * 9 / 10,
+        "deep ITM call should be close to intrinsic"
+    );
     // Deep ITM put ≈ 0
-    assert!(prices.put < PRICE_PRECISION / 10, "deep ITM put should be near zero");
+    assert!(
+        prices.put < PRICE_PRECISION / 10,
+        "deep ITM put should be near zero"
+    );
 }
 
 #[test]
 fn test_futures_fair_value_above_spot() {
     let fair = futures_fair_value(PRICE_PRECISION, 86_400 * 365, 500);
-    assert!(fair > PRICE_PRECISION, "futures should be above spot with positive rate");
-    assert!(fair < 11 * PRICE_PRECISION / 10, "futures should be < 1.1x spot");
+    assert!(
+        fair > PRICE_PRECISION,
+        "futures should be above spot with positive rate"
+    );
+    assert!(
+        fair < 11 * PRICE_PRECISION / 10,
+        "futures should be < 1.1x spot"
+    );
 }
 
 #[test]
@@ -234,8 +256,14 @@ fn test_update_mark_price() {
 
     let now = env.ledger().timestamp();
     let id = derivatives::open(
-        &env, &long, DerivativeKind::Future, &token,
-        1_000_000, PRICE_PRECISION, 0, now + 86_400,
+        &env,
+        &long,
+        DerivativeKind::Future,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        0,
+        now + 86_400,
     );
     derivatives::match_contract(&env, &short, id);
 
@@ -262,8 +290,14 @@ fn test_margin_health_healthy() {
 
     let now = env.ledger().timestamp();
     let id = derivatives::open(
-        &env, &long, DerivativeKind::Future, &token,
-        1_000_000, PRICE_PRECISION, 0, now + 86_400,
+        &env,
+        &long,
+        DerivativeKind::Future,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        0,
+        now + 86_400,
     );
     derivatives::match_contract(&env, &short, id);
 
@@ -311,8 +345,14 @@ fn test_settle_expired_futures_long_profit() {
     let expires_at = now + 100;
 
     let id = derivatives::open(
-        &env, &long, DerivativeKind::Future, &token,
-        1_000_000, PRICE_PRECISION, 0, expires_at,
+        &env,
+        &long,
+        DerivativeKind::Future,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        0,
+        expires_at,
     );
     derivatives::match_contract(&env, &short, id);
 
@@ -344,8 +384,14 @@ fn test_settle_expired_call_option_itm() {
     let expires_at = now + 100;
 
     let id = derivatives::open(
-        &env, &writer, DerivativeKind::Call, &token,
-        1_000_000, PRICE_PRECISION, 50_000, expires_at,
+        &env,
+        &writer,
+        DerivativeKind::Call,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        50_000,
+        expires_at,
     );
     derivatives::match_contract(&env, &holder, id);
 
@@ -375,8 +421,14 @@ fn test_settle_expired_call_option_otm() {
     let expires_at = now + 100;
 
     let id = derivatives::open(
-        &env, &writer, DerivativeKind::Call, &token,
-        1_000_000, PRICE_PRECISION, 50_000, expires_at,
+        &env,
+        &writer,
+        DerivativeKind::Call,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        50_000,
+        expires_at,
     );
     derivatives::match_contract(&env, &holder, id);
 
@@ -406,8 +458,14 @@ fn test_exercise_call_option_itm() {
     let expires_at = now + 86_400;
 
     let id = derivatives::open(
-        &env, &writer, DerivativeKind::Call, &token,
-        1_000_000, PRICE_PRECISION, 50_000, expires_at,
+        &env,
+        &writer,
+        DerivativeKind::Call,
+        &token,
+        1_000_000,
+        PRICE_PRECISION,
+        50_000,
+        expires_at,
     );
     derivatives::match_contract(&env, &holder, id);
 

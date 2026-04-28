@@ -38,7 +38,10 @@ fn test_cpu_instructions_reported() {
 
     let r = sim.simulate_tip(&sender, &creator, 100);
     assert!(r.ok);
-    assert!(r.cpu_instructions > 0, "cpu instructions should be non-zero");
+    assert!(
+        r.cpu_instructions > 0,
+        "cpu instructions should be non-zero"
+    );
 }
 
 #[test]

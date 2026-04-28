@@ -268,13 +268,7 @@ pub fn create_market(
 }
 
 /// Place a bet on a market outcome. Transfers tokens from bettor to contract.
-pub fn place_bet(
-    env: &Env,
-    bettor: &Address,
-    market_id: u64,
-    outcome: Outcome,
-    amount: i128,
-) {
+pub fn place_bet(env: &Env, bettor: &Address, market_id: u64, outcome: Outcome, amount: i128) {
     let mut market = get_market(env, market_id).expect("market not found");
 
     let now = env.ledger().timestamp();

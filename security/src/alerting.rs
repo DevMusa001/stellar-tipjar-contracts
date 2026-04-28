@@ -7,10 +7,20 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Alert {
-    RateLimited { address: String },
-    AnomalyDetected { tx_hash: String, sender: String, score: f64 },
-    Blacklisted { address: String },
-    CircuitBreakerTripped { reason: String },
+    RateLimited {
+        address: String,
+    },
+    AnomalyDetected {
+        tx_hash: String,
+        sender: String,
+        score: f64,
+    },
+    Blacklisted {
+        address: String,
+    },
+    CircuitBreakerTripped {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,8 +35,7 @@ fn setup() -> (
     client.add_token(&admin, &reward_token);
 
     // Mint reward tokens to admin for program funding
-    soroban_sdk::token::StellarAssetClient::new(&env, &reward_token)
-        .mint(&admin, &10_000_000i128);
+    soroban_sdk::token::StellarAssetClient::new(&env, &reward_token).mint(&admin, &10_000_000i128);
 
     (env, client, admin, lp_token, reward_token)
 }
@@ -72,10 +71,10 @@ fn test_create_program_returns_id() {
         &lp_token,
         &reward_token,
         &1_000_000i128,
-        &2_000u32,  // 20% APY
-        &0u64,      // no cliff
+        &2_000u32,      // 20% APY
+        &0u64,          // no cliff
         &31_536_000u64, // 1 year vesting
-        &0u64,      // no end
+        &0u64,          // no end
     );
 
     assert_eq!(program_id, 1);
@@ -91,8 +90,8 @@ fn test_create_program_stores_config() {
         &reward_token,
         &500_000i128,
         &1_000u32,
-        &86_400u64,     // 1 day cliff
-        &2_592_000u64,  // 30 day vesting
+        &86_400u64,    // 1 day cliff
+        &2_592_000u64, // 30 day vesting
         &0u64,
     );
 
@@ -110,8 +109,14 @@ fn test_create_program_zero_rewards_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let result = client.try_lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &0i128, &1_000u32, &0u64, &86_400u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &0i128,
+        &1_000u32,
+        &0u64,
+        &86_400u64,
+        &0u64,
     );
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
 }
@@ -121,8 +126,14 @@ fn test_create_program_zero_rate_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let result = client.try_lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &0u32, &0u64, &86_400u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &0u32,
+        &0u64,
+        &86_400u64,
+        &0u64,
     );
     assert_eq!(result, Err(Ok(TipJarError::LmInvalidRate)));
 }
@@ -132,9 +143,12 @@ fn test_create_program_cliff_exceeds_duration_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let result = client.try_lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &1_000u32,
-        &2_000u64,  // cliff > duration
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &1_000u32,
+        &2_000u64, // cliff > duration
         &1_000u64,
         &0u64,
     );
@@ -148,8 +162,14 @@ fn test_stake_updates_position_and_program() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -169,8 +189,14 @@ fn test_stake_zero_amount_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -183,8 +209,14 @@ fn test_stake_inactive_program_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     client.lm_deactivate_program(&admin, &program_id);
@@ -201,8 +233,14 @@ fn test_stake_multiple_providers() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let p1 = Address::generate(&env);
@@ -224,8 +262,14 @@ fn test_unstake_reduces_position() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -247,8 +291,14 @@ fn test_unstake_more_than_staked_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -266,9 +316,14 @@ fn test_rewards_accrue_over_time() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &10_000u32, // 100% APY
-        &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &10_000u32, // 100% APY
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -289,8 +344,14 @@ fn test_no_rewards_before_staking() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -306,9 +367,14 @@ fn test_nothing_vested_before_cliff() {
 
     let cliff = 86_400u64; // 1 day
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &10_000u32,
-        &cliff, &(cliff * 30), &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &10_000u32,
+        &cliff,
+        &(cliff * 30),
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -330,9 +396,14 @@ fn test_rewards_vest_after_cliff() {
     let cliff = 86_400u64;
     let duration = cliff * 30;
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &10_000u32,
-        &cliff, &duration, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &10_000u32,
+        &cliff,
+        &duration,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -353,9 +424,14 @@ fn test_claim_before_cliff_fails() {
 
     let cliff = 86_400u64;
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &10_000u32,
-        &cliff, &(cliff * 30), &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &10_000u32,
+        &cliff,
+        &(cliff * 30),
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -376,9 +452,14 @@ fn test_claim_after_cliff_succeeds() {
     let cliff = 0u64; // no cliff for simplicity
     let duration = 31_536_000u64;
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &10_000u32, // 100% APY
-        &cliff, &duration, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &10_000u32, // 100% APY
+        &cliff,
+        &duration,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -402,8 +483,14 @@ fn test_boost_increases_multiplier() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -426,8 +513,14 @@ fn test_full_year_lock_gives_max_boost() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -446,8 +539,14 @@ fn test_boost_zero_duration_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -463,8 +562,14 @@ fn test_boost_lower_than_current_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -486,8 +591,14 @@ fn test_deactivate_program() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     client.lm_deactivate_program(&admin, &program_id);
@@ -501,8 +612,14 @@ fn test_deactivate_already_inactive_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     client.lm_deactivate_program(&admin, &program_id);
@@ -518,12 +635,24 @@ fn test_provider_programs_tracked() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let p1 = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &500_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &500_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
     let p2 = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &500_000i128, &3_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &500_000i128,
+        &3_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let provider = Address::generate(&env);
@@ -542,8 +671,14 @@ fn test_lm_stake_paused_fails() {
     let (env, client, admin, lp_token, reward_token) = setup();
 
     let program_id = client.lm_create_program(
-        &admin, &lp_token, &reward_token,
-        &1_000_000i128, &2_000u32, &0u64, &31_536_000u64, &0u64,
+        &admin,
+        &lp_token,
+        &reward_token,
+        &1_000_000i128,
+        &2_000u32,
+        &0u64,
+        &31_536_000u64,
+        &0u64,
     );
 
     let reason = soroban_sdk::String::from_str(&env, "maintenance");

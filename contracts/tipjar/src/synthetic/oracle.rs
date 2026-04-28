@@ -3,10 +3,16 @@
 //! Calculates real-time valuations of synthetic assets based on tip pool
 //! performance metrics.
 
-use soroban_sdk::Env;
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
-use super::types::SyntheticAsset;
 use super::events::emit_price_updated;
+use super::types::SyntheticAsset;
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
+use soroban_sdk::Env;
 
 /// Calculates and updates the oracle price for a synthetic asset
 ///
@@ -26,7 +32,7 @@ use super::events::emit_price_updated;
 /// - Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 pub fn update_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let mut asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -35,11 +41,7 @@ pub fn update_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError
 
     // Get the tip pool balance for the creator and backing token
     let balance_key = DataKey::CreatorBalance(asset.creator.clone(), asset.backing_token.clone());
-    let tip_pool_balance: i128 = env
-        .storage()
-        .persistent()
-        .get(&balance_key)
-        .unwrap_or(0);
+    let tip_pool_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
     // Calculate the oracle price based on the formula
     let new_price = if asset.total_supply > 0 {
@@ -84,7 +86,7 @@ pub fn update_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError
 /// - Validates: Requirements 4.1, 9.3
 pub fn get_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Retrieve the synthetic asset
-    let asset_key = DataKey::(Key::());
+    let asset_key = DataKey(Key());
     let asset: SyntheticAsset = env
         .storage()
         .persistent()
@@ -94,8 +96,3 @@ pub fn get_oracle_price(env: &Env, asset_id: u64) -> Result<i128, TipJarError> {
     // Return the current oracle price
     Ok(asset.oracle_price)
 }
-
-
-
-
-

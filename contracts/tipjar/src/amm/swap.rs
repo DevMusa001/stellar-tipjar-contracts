@@ -4,7 +4,7 @@ use soroban_sdk::{panic_with_error, token, Address, Env};
 
 use crate::{DataKey, TipJarError};
 
-use super::{pool::accrue_pool_fee, save_pool, get_pool, SwapResult};
+use super::{get_pool, pool::accrue_pool_fee, save_pool, SwapResult};
 
 // ── Core swap ────────────────────────────────────────────────────────────────
 
@@ -61,7 +61,11 @@ pub fn swap(
         // spot = reserve_out / reserve_in (× 10_000 for bps)
         let spot = reserve_out * 10_000 / reserve_in;
         let effective = amount_out * 10_000 / amount_in;
-        if spot > effective { (spot - effective) * 10_000 / spot } else { 0 }
+        if spot > effective {
+            (spot - effective) * 10_000 / spot
+        } else {
+            0
+        }
     };
 
     // Transfer token_in from sender to contract
@@ -91,7 +95,11 @@ pub fn swap(
     save_pool(env, &pool);
 
     // Transfer token_out to sender
-    let token_out = if is_a_in { pool.token_b.clone() } else { pool.token_a.clone() };
+    let token_out = if is_a_in {
+        pool.token_b.clone()
+    } else {
+        pool.token_a.clone()
+    };
     token::Client::new(env, &token_out).transfer(&contract, sender, &amount_out);
 
     SwapResult {
@@ -131,7 +139,7 @@ pub fn calculate_input_for_output(
     let numerator = reserve_in * amount_out;
     let denominator = reserve_out - amount_out;
     let amount_in_after_fee = numerator / denominator + 1; // ceil
-    // amount_in = amount_in_after_fee * 10_000 / (10_000 - fee_bps)
+                                                           // amount_in = amount_in_after_fee * 10_000 / (10_000 - fee_bps)
     amount_in_after_fee * 10_000 / (10_000 - fee_bps as i128) + 1
 }
 
@@ -153,7 +161,11 @@ pub fn price_impact_bps(
     }
     let spot = reserve_out * 10_000 / reserve_in;
     let effective = amount_out * 10_000 / amount_in;
-    if spot > effective { (spot - effective) * 10_000 / spot } else { 0 }
+    if spot > effective {
+        (spot - effective) * 10_000 / spot
+    } else {
+        0
+    }
 }
 
 /// View: expected output for a swap (no state change).

@@ -4,11 +4,11 @@
 //! and integrates with the existing proposal and voting systems.
 
 use super::conviction::{
-    self, ConvictionVote, ConvictionConfig, calculate_effective_voting_power,
-    record_conviction_vote, get_conviction_vote, update_conviction_vote,
+    self, calculate_effective_voting_power, get_conviction_vote, record_conviction_vote,
+    update_conviction_vote, ConvictionConfig, ConvictionVote,
 };
 use super::voting;
-use super::{Vote, VoteChoice, DataKey};
+use super::{DataKey, Vote, VoteChoice};
 use soroban_sdk::{Address, Env};
 
 /// Cast a conviction vote on a proposal
@@ -44,8 +44,8 @@ pub fn cast_conviction_vote(
     record_conviction_vote(env, voter, proposal_id, base_voting_power);
 
     // Calculate effective voting power with conviction multiplier
-    let conviction_vote = get_conviction_vote(env, proposal_id, voter)
-        .expect("Conviction vote should exist");
+    let conviction_vote =
+        get_conviction_vote(env, proposal_id, voter).expect("Conviction vote should exist");
     let effective_voting_power = calculate_effective_voting_power(env, &conviction_vote);
 
     // Record standard vote with effective voting power
@@ -61,7 +61,8 @@ pub fn cast_conviction_vote(
 
     // Update voter's total votes
     let voter_votes_key = DataKey::VoterVotes(voter.clone());
-    let current_votes: i128 = env.storage()
+    let current_votes: i128 = env
+        .storage()
         .persistent()
         .get(&voter_votes_key)
         .unwrap_or(0);
@@ -108,21 +109,22 @@ pub fn change_conviction_vote(
 
     // Get existing vote
     let vote_key = DataKey::Vote(proposal_id, voter.clone());
-    let old_vote = env.storage()
+    let old_vote = env
+        .storage()
         .persistent()
         .get(&vote_key)
         .expect("No vote found to change");
 
     // Get existing conviction vote
-    let old_conviction = get_conviction_vote(env, proposal_id, voter)
-        .expect("No conviction vote found");
+    let old_conviction =
+        get_conviction_vote(env, proposal_id, voter).expect("No conviction vote found");
 
     // Update conviction vote (applies decay)
     update_conviction_vote(env, voter, proposal_id, new_base_voting_power);
 
     // Get updated conviction vote
-    let new_conviction = get_conviction_vote(env, proposal_id, voter)
-        .expect("Conviction vote should exist");
+    let new_conviction =
+        get_conviction_vote(env, proposal_id, voter).expect("Conviction vote should exist");
     let new_effective_voting_power = calculate_effective_voting_power(env, &new_conviction);
 
     // Update standard vote
@@ -135,7 +137,8 @@ pub fn change_conviction_vote(
 
     // Update voter's total votes
     let voter_votes_key = DataKey::VoterVotes(voter.clone());
-    let current_votes: i128 = env.storage()
+    let current_votes: i128 = env
+        .storage()
         .persistent()
         .get(&voter_votes_key)
         .unwrap_or(0);
@@ -188,7 +191,8 @@ pub fn get_conviction_voting_details(
     voter: &Address,
 ) -> Option<ConvictionVotingDetails> {
     if let Some(conviction_vote) = get_conviction_vote(env, proposal_id, voter) {
-        let multiplier = conviction::calculate_conviction_multiplier(env, conviction_vote.conviction_start);
+        let multiplier =
+            conviction::calculate_conviction_multiplier(env, conviction_vote.conviction_start);
         let accumulated = conviction::calculate_accumulated_conviction(env, &conviction_vote);
         let effective_power = calculate_effective_voting_power(env, &conviction_vote);
 
@@ -198,7 +202,10 @@ pub fn get_conviction_voting_details(
             conviction_multiplier: multiplier,
             accumulated_conviction: accumulated,
             effective_voting_power: effective_power,
-            time_locked: env.ledger().timestamp().saturating_sub(conviction_vote.conviction_start),
+            time_locked: env
+                .ledger()
+                .timestamp()
+                .saturating_sub(conviction_vote.conviction_start),
         })
     } else {
         None

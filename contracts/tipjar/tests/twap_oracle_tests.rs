@@ -12,7 +12,14 @@ use tipjar::{TipJarContract, TipJarContractClient, TipJarError};
 
 const PRECISION: i128 = 10_000_000;
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -51,8 +58,13 @@ fn test_create_oracle_returns_id() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote,
-        &1_800u64, &10u32, &(PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &1_800u64,
+        &10u32,
+        &(PRECISION),
     );
     assert_eq!(id, 1);
 }
@@ -62,8 +74,13 @@ fn test_create_oracle_stores_config() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote,
-        &3_600u64, &20u32, &(2 * PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &3_600u64,
+        &20u32,
+        &(2 * PRECISION),
     );
 
     let oracle = client.twap_get_oracle(&id);
@@ -78,8 +95,12 @@ fn test_create_oracle_stores_config() {
 fn test_create_oracle_increments_id() {
     let (env, client, _admin, updater, base, quote) = setup();
 
-    let id1 = client.twap_create_oracle(&updater, &updater, &base, &quote, &1_800u64, &10u32, &PRECISION);
-    let id2 = client.twap_create_oracle(&updater, &updater, &base, &quote, &1_800u64, &10u32, &PRECISION);
+    let id1 = client.twap_create_oracle(
+        &updater, &updater, &base, &quote, &1_800u64, &10u32, &PRECISION,
+    );
+    let id2 = client.twap_create_oracle(
+        &updater, &updater, &base, &quote, &1_800u64, &10u32, &PRECISION,
+    );
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
 }
@@ -88,9 +109,8 @@ fn test_create_oracle_increments_id() {
 fn test_create_oracle_invalid_price_fails() {
     let (env, client, _admin, updater, base, quote) = setup();
 
-    let result = client.try_twap_create_oracle(
-        &updater, &updater, &base, &quote, &1_800u64, &10u32, &0i128,
-    );
+    let result =
+        client.try_twap_create_oracle(&updater, &updater, &base, &quote, &1_800u64, &10u32, &0i128);
     assert_eq!(result, Err(Ok(TipJarError::TwapInvalidPrice)));
 }
 
@@ -109,9 +129,13 @@ fn test_create_oracle_window_too_large_fails() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let result = client.try_twap_create_oracle(
-        &updater, &updater, &base, &quote,
+        &updater,
+        &updater,
+        &base,
+        &quote,
         &(8 * 24 * 3600u64), // 8 days — exceeds max
-        &10u32, &PRECISION,
+        &10u32,
+        &PRECISION,
     );
     assert_eq!(result, Err(Ok(TipJarError::TwapInvalidWindow)));
 }
@@ -233,7 +257,13 @@ fn test_get_latest_price_returns_seed() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote, &1_800u64, &10u32, &(5 * PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &1_800u64,
+        &10u32,
+        &(5 * PRECISION),
     );
 
     let price = client.twap_get_latest_price(&id);
@@ -262,7 +292,13 @@ fn test_twap_with_single_observation_returns_spot() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote, &1_800u64, &10u32, &(3 * PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &1_800u64,
+        &10u32,
+        &(3 * PRECISION),
     );
 
     // Only seed observation — TWAP falls back to spot price
@@ -276,9 +312,8 @@ fn test_twap_constant_price_equals_spot() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let price = 4 * PRECISION;
-    let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote, &1_800u64, &10u32, &price,
-    );
+    let id =
+        client.twap_create_oracle(&updater, &updater, &base, &quote, &1_800u64, &10u32, &price);
 
     // Record the same price multiple times
     for _ in 0..5 {
@@ -297,7 +332,13 @@ fn test_twap_averages_rising_prices() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote, &3_600u64, &20u32, &(1 * PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &3_600u64,
+        &20u32,
+        &(1 * PRECISION),
     );
 
     // Record prices 1, 2, 3, 4, 5 at equal intervals
@@ -341,7 +382,13 @@ fn test_get_observations_returns_seed() {
     let (env, client, _admin, updater, base, quote) = setup();
 
     let id = client.twap_create_oracle(
-        &updater, &updater, &base, &quote, &1_800u64, &10u32, &(2 * PRECISION),
+        &updater,
+        &updater,
+        &base,
+        &quote,
+        &1_800u64,
+        &10u32,
+        &(2 * PRECISION),
     );
 
     let obs = client.twap_get_observations(&id, &5u32);

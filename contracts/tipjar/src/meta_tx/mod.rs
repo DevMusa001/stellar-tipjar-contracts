@@ -17,7 +17,7 @@
 //! A request is only valid when `request.nonce == stored_nonce`, after which
 //! the stored nonce is incremented.
 
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Bytes, Env, String};
+use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, String};
 
 use crate::DataKey;
 
@@ -198,11 +198,7 @@ pub fn canonical_hash(env: &Env, req: &MetaTipRequest) -> BytesN<32> {
 ///   3. Nonce matches the stored per-sender nonce.
 ///   4. Nullifier (hash) has not been consumed.
 ///   5. Ed25519 signature is valid over the canonical hash.
-pub fn verify(
-    env: &Env,
-    relayer: &Address,
-    req: &MetaTipRequest,
-) -> BytesN<32> {
+pub fn verify(env: &Env, relayer: &Address, req: &MetaTipRequest) -> BytesN<32> {
     assert!(is_trusted_relayer(env, relayer), "Untrusted relayer");
 
     let now = env.ledger().timestamp();
@@ -229,12 +225,7 @@ pub fn verify(
 ///
 /// Must be called *after* the tip/channel action has been applied so that
 /// state changes follow the CEI pattern.
-pub fn finalize(
-    env: &Env,
-    relayer: &Address,
-    req: &MetaTipRequest,
-    hash: &BytesN<32>,
-) -> u64 {
+pub fn finalize(env: &Env, relayer: &Address, req: &MetaTipRequest, hash: &BytesN<32>) -> u64 {
     mark_consumed(env, hash);
     bump_nonce(env, &req.from);
 
@@ -257,7 +248,14 @@ pub fn finalize(
 
     env.events().publish(
         (symbol_short!("mtx_exec"),),
-        (id, req.from.clone(), relayer.clone(), req.to.clone(), req.amount, req.nonce),
+        (
+            id,
+            req.from.clone(),
+            relayer.clone(),
+            req.to.clone(),
+            req.amount,
+            req.nonce,
+        ),
     );
 
     id

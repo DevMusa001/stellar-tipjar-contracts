@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 /// Rate limiter using an in-memory sliding window per address.
 use std::collections::HashMap;
 use std::sync::Mutex;
-use chrono::{DateTime, Utc};
 
 pub struct RateLimiter {
     /// max transactions per window
@@ -69,10 +69,16 @@ impl RateLimiter {
     }
 
     pub fn is_blacklisted(&self, address: &str) -> bool {
-        self.blacklist.lock().unwrap().contains(&address.to_string())
+        self.blacklist
+            .lock()
+            .unwrap()
+            .contains(&address.to_string())
     }
 
     pub fn is_whitelisted(&self, address: &str) -> bool {
-        self.whitelist.lock().unwrap().contains(&address.to_string())
+        self.whitelist
+            .lock()
+            .unwrap()
+            .contains(&address.to_string())
     }
 }

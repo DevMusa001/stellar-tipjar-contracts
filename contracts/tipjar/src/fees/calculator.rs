@@ -1,5 +1,5 @@
-use soroban_sdk::Env;
 use super::adjustment::CongestionLevel;
+use soroban_sdk::Env;
 
 /// Base fee in basis points (1% = 100 bps).
 pub const BASE_FEE_BPS: u32 = 100;

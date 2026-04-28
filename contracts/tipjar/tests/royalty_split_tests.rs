@@ -3,10 +3,7 @@
 extern crate std;
 
 use soroban_sdk::{vec, Address, Env};
-use tipjar::{
-    royalty::{SplitRecipient},
-    TipJarContract, TipJarContractClient,
-};
+use tipjar::{royalty::SplitRecipient, TipJarContract, TipJarContractClient};
 
 fn setup() -> (Env, TipJarContractClient<'static>, Address) {
     let env = Env::default();
@@ -36,8 +33,14 @@ fn test_set_split_stores_config() {
 
     let recipients = vec![
         &env,
-        SplitRecipient { recipient: a.clone(), share_bps: 6_000 },
-        SplitRecipient { recipient: b.clone(), share_bps: 4_000 },
+        SplitRecipient {
+            recipient: a.clone(),
+            share_bps: 6_000,
+        },
+        SplitRecipient {
+            recipient: b.clone(),
+            share_bps: 4_000,
+        },
     ];
     client.set_split(&split_id, &owner, &recipients);
 
@@ -69,8 +72,14 @@ fn test_modify_split_updates_recipients() {
         &owner,
         &vec![
             &env,
-            SplitRecipient { recipient: a.clone(), share_bps: 5_000 },
-            SplitRecipient { recipient: b.clone(), share_bps: 5_000 },
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 5_000,
+            },
+            SplitRecipient {
+                recipient: b.clone(),
+                share_bps: 5_000,
+            },
         ],
     );
 
@@ -79,9 +88,18 @@ fn test_modify_split_updates_recipients() {
         &owner,
         &vec![
             &env,
-            SplitRecipient { recipient: a.clone(), share_bps: 3_000 },
-            SplitRecipient { recipient: b.clone(), share_bps: 3_000 },
-            SplitRecipient { recipient: c.clone(), share_bps: 4_000 },
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 3_000,
+            },
+            SplitRecipient {
+                recipient: b.clone(),
+                share_bps: 3_000,
+            },
+            SplitRecipient {
+                recipient: c.clone(),
+                share_bps: 4_000,
+            },
         ],
     );
 
@@ -104,8 +122,14 @@ fn test_distribute_credits_balances_proportionally() {
         &owner,
         &vec![
             &env,
-            SplitRecipient { recipient: a.clone(), share_bps: 7_000 },
-            SplitRecipient { recipient: b.clone(), share_bps: 3_000 },
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 7_000,
+            },
+            SplitRecipient {
+                recipient: b.clone(),
+                share_bps: 3_000,
+            },
         ],
     );
 
@@ -129,7 +153,7 @@ fn test_distribute_no_config_returns_zero() {
 fn test_nested_split_distributes_recursively() {
     let (env, client, _) = setup();
     let owner = Address::generate(&env);
-    let team = Address::generate(&env);   // inner split
+    let team = Address::generate(&env); // inner split
     let a = Address::generate(&env);
     let b = Address::generate(&env);
     let c = Address::generate(&env);
@@ -140,8 +164,14 @@ fn test_nested_split_distributes_recursively() {
         &owner,
         &vec![
             &env,
-            SplitRecipient { recipient: a.clone(), share_bps: 5_000 },
-            SplitRecipient { recipient: b.clone(), share_bps: 5_000 },
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 5_000,
+            },
+            SplitRecipient {
+                recipient: b.clone(),
+                share_bps: 5_000,
+            },
         ],
     );
 
@@ -152,8 +182,14 @@ fn test_nested_split_distributes_recursively() {
         &owner,
         &vec![
             &env,
-            SplitRecipient { recipient: c.clone(), share_bps: 4_000 },
-            SplitRecipient { recipient: team.clone(), share_bps: 6_000 },
+            SplitRecipient {
+                recipient: c.clone(),
+                share_bps: 4_000,
+            },
+            SplitRecipient {
+                recipient: team.clone(),
+                share_bps: 6_000,
+            },
         ],
     );
 
@@ -177,7 +213,13 @@ fn test_history_count_increments_on_distribute() {
     client.set_split(
         &split_id,
         &owner,
-        &vec![&env, SplitRecipient { recipient: a.clone(), share_bps: 10_000 }],
+        &vec![
+            &env,
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 10_000,
+            },
+        ],
     );
 
     assert_eq!(client.get_split_history_count(&split_id), 0);
@@ -197,12 +239,20 @@ fn test_history_entry_records_amount() {
     client.set_split(
         &split_id,
         &owner,
-        &vec![&env, SplitRecipient { recipient: a.clone(), share_bps: 10_000 }],
+        &vec![
+            &env,
+            SplitRecipient {
+                recipient: a.clone(),
+                share_bps: 10_000,
+            },
+        ],
     );
 
     client.distribute_split(&split_id, &500i128);
 
-    let entry = client.get_split_history_entry(&split_id, &0u64).expect("entry should exist");
+    let entry = client
+        .get_split_history_entry(&split_id, &0u64)
+        .expect("entry should exist");
     assert_eq!(entry.amount, 500);
 }
 

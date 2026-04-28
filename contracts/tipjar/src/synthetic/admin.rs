@@ -3,14 +3,17 @@
 //! Provides creator controls for managing synthetic assets including
 //! pause, resume, and parameter adjustments.
 
-use soroban_sdk::{token, Address, Env, Vec};
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, SyntheticKey};
-use super::types::SyntheticAsset;
 use super::events::{
-    emit_synthetic_asset_created, emit_synthetic_asset_paused, emit_synthetic_asset_resumed,
-    emit_collateralization_updated, emit_collateral_updated,
+    emit_collateral_updated, emit_collateralization_updated, emit_synthetic_asset_created,
+    emit_synthetic_asset_paused, emit_synthetic_asset_resumed,
 };
 use super::supply::{get_collateralization_ratio, update_collateral};
+use super::types::SyntheticAsset;
+use crate::{
+    AuctionError, CoreError, CreditError, DataKey, FeatureError, OtherError, StreamError,
+    SyntheticKey, SystemError, TipJarError, VestingError,
+};
+use soroban_sdk::{token, Address, Env, Vec};
 
 /// Creates a new synthetic asset
 ///
@@ -56,11 +59,7 @@ pub fn create_synthetic_asset(
 
     // Generate unique asset_id using SyntheticAssetCounter
     let counter_key = DataKey::Synthetic(SyntheticKey::SyntheticAssetCounter);
-    let current_counter: u64 = env
-        .storage()
-        .instance()
-        .get(&counter_key)
-        .unwrap_or(0);
+    let current_counter: u64 = env.storage().instance().get(&counter_key).unwrap_or(0);
     let asset_id = current_counter + 1;
     env.storage().instance().set(&counter_key, &asset_id);
 
@@ -83,14 +82,17 @@ pub fn create_synthetic_asset(
     env.storage().persistent().set(&asset_key, &asset);
 
     // Add asset_id to creator's asset list
-    let creator_assets_key = DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
+    let creator_assets_key =
+        DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
     let mut creator_assets: Vec<u64> = env
         .storage()
         .persistent()
         .get(&creator_assets_key)
         .unwrap_or(Vec::new(env));
     creator_assets.push_back(asset_id);
-    env.storage().persistent().set(&creator_assets_key, &creator_assets);
+    env.storage()
+        .persistent()
+        .set(&creator_assets_key, &creator_assets);
 
     // Emit SyntheticAssetCreated event
     emit_synthetic_asset_created(
@@ -277,7 +279,9 @@ pub fn add_collateral(
     let new_balance = current_balance
         .checked_add(amount)
         .ok_or(CoreError::InvalidAmount)?;
-    env.storage().persistent().set(&creator_balance_key, &new_balance);
+    env.storage()
+        .persistent()
+        .set(&creator_balance_key, &new_balance);
 
     // Update total collateral via update_collateral()
     update_collateral(env, asset_id, amount)?;

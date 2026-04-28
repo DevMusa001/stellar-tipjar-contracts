@@ -235,15 +235,23 @@ const INTEGRATION_STEPS: u32 = 20;
 /// Computes the collateral cost to buy `amount` tokens starting from `current_supply`.
 /// Returns raw collateral (not scaled by PRECISION).
 fn cost_to_buy(curve: &BondingCurve, amount: i128) -> i128 {
-    integrate_price(curve, curve.supply, curve.supply + amount, INTEGRATION_STEPS)
-        / PRECISION
+    integrate_price(
+        curve,
+        curve.supply,
+        curve.supply + amount,
+        INTEGRATION_STEPS,
+    ) / PRECISION
 }
 
 /// Computes the collateral returned for selling `amount` tokens.
 /// Returns raw collateral (not scaled by PRECISION).
 fn return_on_sell(curve: &BondingCurve, amount: i128) -> i128 {
-    integrate_price(curve, curve.supply - amount, curve.supply, INTEGRATION_STEPS)
-        / PRECISION
+    integrate_price(
+        curve,
+        curve.supply - amount,
+        curve.supply,
+        INTEGRATION_STEPS,
+    ) / PRECISION
 }
 
 // ── Storage helpers ───────────────────────────────────────────────────────────
@@ -255,8 +263,7 @@ fn get_curve(env: &Env, curve_id: u64) -> Option<BondingCurve> {
 }
 
 fn get_curve_or_panic(env: &Env, curve_id: u64) -> BondingCurve {
-    get_curve(env, curve_id)
-        .unwrap_or_else(|| panic_with_error!(env, TipJarError::BcNotFound))
+    get_curve(env, curve_id).unwrap_or_else(|| panic_with_error!(env, TipJarError::BcNotFound))
 }
 
 fn set_curve(env: &Env, curve: &BondingCurve) {
@@ -361,7 +368,12 @@ pub fn create_curve(
 
     env.events().publish(
         (symbol_short!("bc_create"),),
-        (curve_id, creator.clone(), tip_token.clone(), reserve_token.clone()),
+        (
+            curve_id,
+            creator.clone(),
+            tip_token.clone(),
+            reserve_token.clone(),
+        ),
     );
 
     curve_id
@@ -512,7 +524,13 @@ pub fn sell(
 
     env.events().publish(
         (symbol_short!("bc_sell"),),
-        (seller.clone(), curve_id, token_amount, net_return, new_price),
+        (
+            seller.clone(),
+            curve_id,
+            token_amount,
+            net_return,
+            new_price,
+        ),
     );
 
     TradeResult {
@@ -604,10 +622,8 @@ pub fn deactivate_curve(env: &Env, creator: &Address, curve_id: u64) {
     curve.active = false;
     set_curve(env, &curve);
 
-    env.events().publish(
-        (symbol_short!("bc_deact"),),
-        (curve_id,),
-    );
+    env.events()
+        .publish((symbol_short!("bc_deact"),), (curve_id,));
 }
 
 /// Returns a price quote for buying or selling `amount` tokens without
@@ -661,27 +677,21 @@ mod math_tests {
     fn linear_curve() -> BondingCurve {
         BondingCurve {
             id: 1,
-            creator: soroban_sdk::Address::from_string(
-                &soroban_sdk::String::from_str(
-                    &soroban_sdk::Env::default(),
-                    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
-                ),
-            ),
-            tip_token: soroban_sdk::Address::from_string(
-                &soroban_sdk::String::from_str(
-                    &soroban_sdk::Env::default(),
-                    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
-                ),
-            ),
-            reserve_token: soroban_sdk::Address::from_string(
-                &soroban_sdk::String::from_str(
-                    &soroban_sdk::Env::default(),
-                    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
-                ),
-            ),
+            creator: soroban_sdk::Address::from_string(&soroban_sdk::String::from_str(
+                &soroban_sdk::Env::default(),
+                "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+            )),
+            tip_token: soroban_sdk::Address::from_string(&soroban_sdk::String::from_str(
+                &soroban_sdk::Env::default(),
+                "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+            )),
+            reserve_token: soroban_sdk::Address::from_string(&soroban_sdk::String::from_str(
+                &soroban_sdk::Env::default(),
+                "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+            )),
             curve_type: CurveType::Linear,
-            base_price: PRECISION,       // 1.0
-            slope: PRECISION / 10,       // 0.1 per token
+            base_price: PRECISION, // 1.0
+            slope: PRECISION / 10, // 0.1 per token
             k_param: 0,
             midpoint: 0,
             max_price: 0,
@@ -750,6 +760,9 @@ mod math_tests {
         // Should be approximately equal (within integration error)
         let diff = (buy_cost - sell_ret).abs();
         let tolerance = buy_cost / 20; // 5% tolerance for numerical integration
-        assert!(diff < tolerance, "buy={buy_cost} sell={sell_ret} diff={diff}");
+        assert!(
+            diff < tolerance,
+            "buy={buy_cost} sell={sell_ret} diff={diff}"
+        );
     }
 }

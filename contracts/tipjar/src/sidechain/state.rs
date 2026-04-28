@@ -45,7 +45,10 @@ pub fn get_state(env: &Env) -> SidechainState {
 pub fn get_finalized_total(env: &Env, creator: &Address, token: &Address) -> i128 {
     env.storage()
         .persistent()
-        .get(&DataKey::SidechainFinalizedTotal(creator.clone(), token.clone()))
+        .get(&DataKey::SidechainFinalizedTotal(
+            creator.clone(),
+            token.clone(),
+        ))
         .unwrap_or(0)
 }
 

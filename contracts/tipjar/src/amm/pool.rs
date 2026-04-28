@@ -7,8 +7,8 @@ use crate::{DataKey, TipJarError};
 use super::{
     accrue_fee, get_lp_shares, get_pool, get_pool_id_by_tokens, isqrt, next_pool_id,
     pending_rewards, register_pool_tokens, save_pool, set_lp_shares, set_provider_debt,
-    settle_rewards, AddLiquidityResult, LiquidityPool, RemoveLiquidityResult,
-    DEFAULT_FEE_BPS, MIN_INITIAL_LIQUIDITY,
+    settle_rewards, AddLiquidityResult, LiquidityPool, RemoveLiquidityResult, DEFAULT_FEE_BPS,
+    MIN_INITIAL_LIQUIDITY,
 };
 
 // ── Pool creation ────────────────────────────────────────────────────────────
@@ -158,7 +158,11 @@ pub fn add_liquidity(
     set_lp_shares(env, pool_id, provider, current_shares + shares);
     set_provider_debt(env, pool_id, provider, pool.fee_per_share_accum);
 
-    AddLiquidityResult { shares_minted: shares, amount_a, amount_b }
+    AddLiquidityResult {
+        shares_minted: shares,
+        amount_a,
+        amount_b,
+    }
 }
 
 // ── Remove liquidity ─────────────────────────────────────────────────────────
@@ -219,7 +223,11 @@ pub fn remove_liquidity(
         token::Client::new(env, &pool.token_a).transfer(&contract, provider, &rewards);
     }
 
-    RemoveLiquidityResult { amount_a, amount_b, rewards_claimed: rewards }
+    RemoveLiquidityResult {
+        amount_a,
+        amount_b,
+        rewards_claimed: rewards,
+    }
 }
 
 // ── Reward claim ─────────────────────────────────────────────────────────────

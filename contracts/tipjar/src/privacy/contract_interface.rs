@@ -9,18 +9,16 @@
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Symbol, Vec};
 
-use crate::DataKey;
-use super::homomorphic::{
-    EncryptedAmount, HomomorphicPublicKey, RangeProof,
+use super::encrypted_operations::{
+    aggregate_encrypted_tips, compute_encrypted_fee, create_encrypted_tip, get_encrypted_balance,
+    reveal_encrypted_tip,
 };
+use super::homomorphic::{EncryptedAmount, HomomorphicPublicKey, RangeProof};
 use super::key_management::{
-    initialize_homomorphic, rotate_key, get_current_public_key, is_homomorphic_enabled,
+    get_current_public_key, initialize_homomorphic, is_homomorphic_enabled, rotate_key,
     KeyManagementConfig,
 };
-use super::encrypted_operations::{
-    create_encrypted_tip, get_encrypted_balance, reveal_encrypted_tip,
-    aggregate_encrypted_tips, compute_encrypted_fee,
-};
+use crate::DataKey;
 
 /// Initialize homomorphic encryption for the contract.
 ///
@@ -57,8 +55,7 @@ pub fn init_homomorphic(
         rotation_requires_approval: true,
     };
 
-    initialize_homomorphic(&env, &admin, public_key, config)
-        .map_err(|e| Symbol::new(&env, e))
+    initialize_homomorphic(&env, &admin, public_key, config).map_err(|e| Symbol::new(&env, e))
 }
 
 /// Create an encrypted tip.
@@ -132,8 +129,7 @@ pub fn reveal_encrypted_tip_amount(
     decrypted_amount: i128,
     creator: Address,
 ) -> Result<(), Symbol> {
-    reveal_encrypted_tip(&env, tip_id, decrypted_amount, &creator)
-        .map_err(|e| Symbol::new(&env, e))
+    reveal_encrypted_tip(&env, tip_id, decrypted_amount, &creator).map_err(|e| Symbol::new(&env, e))
 }
 
 /// Rotate to a new encryption key.
@@ -162,8 +158,7 @@ pub fn rotate_encryption_key(
         version: new_version,
     };
 
-    rotate_key(&env, &admin, new_key, reason)
-        .map_err(|e| Symbol::new(&env, e))
+    rotate_key(&env, &admin, new_key, reason).map_err(|e| Symbol::new(&env, e))
 }
 
 /// Get current public key.
@@ -174,8 +169,7 @@ pub fn rotate_encryption_key(
 /// # Returns
 /// Current public key
 pub fn get_public_key(env: Env) -> Result<HomomorphicPublicKey, Symbol> {
-    get_current_public_key(&env)
-        .map_err(|e| Symbol::new(&env, e))
+    get_current_public_key(&env).map_err(|e| Symbol::new(&env, e))
 }
 
 /// Check if homomorphic encryption is enabled.
@@ -201,8 +195,7 @@ pub fn aggregate_tips_encrypted(
     env: Env,
     encrypted_tips: Vec<EncryptedAmount>,
 ) -> Result<EncryptedAmount, Symbol> {
-    aggregate_encrypted_tips(&env, &encrypted_tips)
-        .map_err(|e| Symbol::new(&env, e))
+    aggregate_encrypted_tips(&env, &encrypted_tips).map_err(|e| Symbol::new(&env, e))
 }
 
 /// Compute encrypted fee on encrypted amount.
@@ -219,6 +212,5 @@ pub fn compute_fee_encrypted(
     encrypted_amount: EncryptedAmount,
     fee_basis_points: u32,
 ) -> Result<EncryptedAmount, Symbol> {
-    compute_encrypted_fee(&encrypted_amount, fee_basis_points)
-        .map_err(|e| Symbol::new(&env, e))
+    compute_encrypted_fee(&encrypted_amount, fee_basis_points).map_err(|e| Symbol::new(&env, e))
 }

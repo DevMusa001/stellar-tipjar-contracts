@@ -15,9 +15,10 @@ pub fn is_processed(env: &Env, source_tx_hash: &BytesN<32>) -> bool {
 
 /// Marks a source transaction as processed to prevent replay.
 pub fn mark_processed(env: &Env, source_tx_hash: &BytesN<32>) {
-    env.storage()
-        .persistent()
-        .set(&BridgeDataKey::BridgeProcessed(source_tx_hash.clone()), &true);
+    env.storage().persistent().set(
+        &BridgeDataKey::BridgeProcessed(source_tx_hash.clone()),
+        &true,
+    );
 }
 
 /// Validates a bridge tip request.
@@ -152,4 +153,3 @@ mod tests {
         assert!(validate_chain_supported(&env, &SourceChain::Polygon).is_ok());
     }
 }
-

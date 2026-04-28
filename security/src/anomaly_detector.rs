@@ -14,7 +14,11 @@ struct Stats {
 
 impl Stats {
     fn new() -> Self {
-        Self { count: 0, mean: 0.0, m2: 0.0 }
+        Self {
+            count: 0,
+            mean: 0.0,
+            m2: 0.0,
+        }
     }
 
     fn update(&mut self, value: f64) {

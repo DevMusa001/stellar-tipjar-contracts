@@ -4,12 +4,12 @@
 
 use soroban_sdk::{token, Address, Env};
 
+use super::pricing::calculate_payoff;
 use super::{
     get_locked_collateral, get_option_or_panic, get_position, remove_active_option,
-    remove_held_option, update_locked_collateral, update_option, update_position, OptionStatus,
-    OptionType, OptionContract,
+    remove_held_option, update_locked_collateral, update_option, update_position, OptionContract,
+    OptionStatus, OptionType,
 };
-use super::pricing::calculate_payoff;
 
 /// Exercise an option contract
 ///
@@ -21,12 +21,7 @@ use super::pricing::calculate_payoff;
 ///
 /// # Returns
 /// Payoff amount transferred to holder
-pub fn exercise_option(
-    env: &Env,
-    holder: &Address,
-    option_id: u64,
-    spot_price: i128,
-) -> i128 {
+pub fn exercise_option(env: &Env, holder: &Address, option_id: u64, spot_price: i128) -> i128 {
     // Get and validate option
     let mut option = get_option_or_panic(env, option_id);
 
@@ -89,11 +84,11 @@ fn settle_option(env: &Env, option: &OptionContract, payoff: i128) {
         OptionType::Call => {
             // Call option: writer delivers tokens to holder
             // Holder pays strike price to writer
-            
+
             // Transfer tokens from contract (writer's collateral) to holder
             if let Some(ref holder) = option.holder {
                 token_client.transfer(&contract_addr, holder, &option.amount);
-                
+
                 // Holder pays strike price to writer
                 let strike_payment = (option.strike_price * option.amount) / 1_000_000;
                 token_client.transfer(holder, &option.writer, &strike_payment);
@@ -102,11 +97,11 @@ fn settle_option(env: &Env, option: &OptionContract, payoff: i128) {
         OptionType::Put => {
             // Put option: holder delivers tokens to writer
             // Writer pays strike price to holder
-            
+
             if let Some(ref holder) = option.holder {
                 // Holder delivers tokens to writer
                 token_client.transfer(holder, &option.writer, &option.amount);
-                
+
                 // Writer pays strike price from collateral
                 let strike_payment = (option.strike_price * option.amount) / 1_000_000;
                 token_client.transfer(&contract_addr, holder, &strike_payment);
@@ -115,7 +110,13 @@ fn settle_option(env: &Env, option: &OptionContract, payoff: i128) {
     }
 
     // Release remaining collateral to writer
-    release_collateral(env, &option.writer, &option.token, option.collateral, payoff);
+    release_collateral(
+        env,
+        &option.writer,
+        &option.token,
+        option.collateral,
+        payoff,
+    );
 }
 
 /// Release collateral back to writer after exercise
@@ -127,7 +128,7 @@ fn release_collateral(
     payoff: i128,
 ) {
     let remaining = collateral.saturating_sub(payoff);
-    
+
     if remaining > 0 {
         let token_client = token::Client::new(env, token);
         token_client.transfer(&env.current_contract_address(), writer, &remaining);
@@ -147,12 +148,7 @@ fn update_holder_position_on_exercise(env: &Env, holder: &Address, payoff: i128)
 }
 
 /// Update writer's position after exercise
-fn update_writer_position_on_exercise(
-    env: &Env,
-    writer: &Address,
-    payoff: i128,
-    collateral: i128,
-) {
+fn update_writer_position_on_exercise(env: &Env, writer: &Address, payoff: i128, collateral: i128) {
     let mut position = get_position(env, writer);
     position.total_collateral = position.total_collateral.saturating_sub(collateral);
     update_position(env, &position);
@@ -234,11 +230,7 @@ pub fn cancel_option(env: &Env, writer: &Address, option_id: u64) {
 
     // Return collateral to writer
     let token_client = token::Client::new(env, &option.token);
-    token_client.transfer(
-        &env.current_contract_address(),
-        writer,
-        &option.collateral,
-    );
+    token_client.transfer(&env.current_contract_address(), writer, &option.collateral);
 
     // Update writer's position
     let mut writer_position = get_position(env, writer);
@@ -263,19 +255,14 @@ mod tests {
         // Call option in the money
         let payoff = calculate_payoff(
             OptionType::Call,
-            1_200_000, // spot
-            1_000_000, // strike
+            1_200_000,  // spot
+            1_000_000,  // strike
             10_000_000, // amount
         );
         assert!(payoff > 0);
 
         // Put option in the money
-        let payoff = calculate_payoff(
-            OptionType::Put,
-            800_000,
-            1_000_000,
-            10_000_000,
-        );
+        let payoff = calculate_payoff(OptionType::Put, 800_000, 1_000_000, 10_000_000);
         assert!(payoff > 0);
     }
 }

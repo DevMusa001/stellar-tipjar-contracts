@@ -131,7 +131,12 @@ pub fn stroops_to_xlm(stroops: i128) -> f64 {
 }
 
 /// Build a `GasEstimate` from raw budget numbers.
-pub fn make_estimate(function_name: &str, storage_variant: &str, cpu: u64, mem: u64) -> GasEstimate {
+pub fn make_estimate(
+    function_name: &str,
+    storage_variant: &str,
+    cpu: u64,
+    mem: u64,
+) -> GasEstimate {
     let cost = compute_cost_stroops(cpu, mem);
     GasEstimate {
         function_name: function_name.to_string(),
@@ -151,7 +156,11 @@ pub fn make_batch_estimate(
     estimate: &GasEstimate,
 ) -> BatchEstimate {
     let total_cost = compute_cost_stroops(estimate.cpu_instructions, estimate.memory_bytes);
-    let per_item = if size > 0 { total_cost / size as i128 } else { 0 };
+    let per_item = if size > 0 {
+        total_cost / size as i128
+    } else {
+        0
+    };
     BatchEstimate {
         operation: operation.to_string(),
         batch_size: size,
@@ -247,8 +256,12 @@ pub fn generate_suggestions(estimates: &[GasEstimate]) -> Vec<Suggestion> {
     }
 
     // Cold vs warm overhead hint for `tip`
-    let cold = estimates.iter().find(|e| e.function_name == "tip" && e.storage_variant == "cold");
-    let warm = estimates.iter().find(|e| e.function_name == "tip" && e.storage_variant == "warm");
+    let cold = estimates
+        .iter()
+        .find(|e| e.function_name == "tip" && e.storage_variant == "cold");
+    let warm = estimates
+        .iter()
+        .find(|e| e.function_name == "tip" && e.storage_variant == "warm");
     if let (Some(c), Some(w)) = (cold, warm) {
         if w.cpu_instructions > 0 {
             let overhead_pct = (c.cpu_instructions as f64 - w.cpu_instructions as f64)
@@ -269,8 +282,12 @@ pub fn generate_suggestions(estimates: &[GasEstimate]) -> Vec<Suggestion> {
     }
 
     // tip_with_fee congestion comparison
-    let fee_low = estimates.iter().find(|e| e.function_name == "tip_with_fee" && e.storage_variant == "low-congestion");
-    let fee_high = estimates.iter().find(|e| e.function_name == "tip_with_fee" && e.storage_variant == "high-congestion");
+    let fee_low = estimates
+        .iter()
+        .find(|e| e.function_name == "tip_with_fee" && e.storage_variant == "low-congestion");
+    let fee_high = estimates
+        .iter()
+        .find(|e| e.function_name == "tip_with_fee" && e.storage_variant == "high-congestion");
     if let (Some(low), Some(high)) = (fee_low, fee_high) {
         if low.cpu_instructions > 0 {
             let overhead_pct = (high.cpu_instructions as f64 - low.cpu_instructions as f64)
@@ -298,29 +315,72 @@ pub fn generate_comparisons(estimates: &[GasEstimate]) -> Vec<Comparison> {
 
     // (label, baseline_fn, baseline_variant, candidate_fn, candidate_variant)
     let pairs: &[(&str, &str, &str, &str, &str)] = &[
-        ("tip: cold vs warm storage",
-            "tip", "cold", "tip", "warm"),
-        ("tip vs tip_with_fee (low congestion)",
-            "tip", "cold", "tip_with_fee", "low-congestion"),
-        ("tip_with_fee: low vs high congestion",
-            "tip_with_fee", "low-congestion", "tip_with_fee", "high-congestion"),
-        ("tip vs tip_split (3 recipients)",
-            "tip", "cold", "tip_split", "3-recipients"),
-        ("tip_split: 3 vs 10 recipients",
-            "tip_split", "3-recipients", "tip_split", "10-recipients"),
-        ("withdraw vs get_withdrawable_balance",
-            "withdraw", "warm", "get_withdrawable_balance", "warm"),
-        ("create_subscription vs execute_subscription_payment",
-            "create_subscription", "cold", "execute_subscription_payment", "warm"),
-        ("execute_conditional_tip vs tip (cold)",
-            "tip", "cold", "execute_conditional_tip", "cold"),
-        ("get_leaderboard: 1 vs 10 creators",
-            "get_leaderboard", "1-creator", "get_leaderboard", "10-creators"),
+        ("tip: cold vs warm storage", "tip", "cold", "tip", "warm"),
+        (
+            "tip vs tip_with_fee (low congestion)",
+            "tip",
+            "cold",
+            "tip_with_fee",
+            "low-congestion",
+        ),
+        (
+            "tip_with_fee: low vs high congestion",
+            "tip_with_fee",
+            "low-congestion",
+            "tip_with_fee",
+            "high-congestion",
+        ),
+        (
+            "tip vs tip_split (3 recipients)",
+            "tip",
+            "cold",
+            "tip_split",
+            "3-recipients",
+        ),
+        (
+            "tip_split: 3 vs 10 recipients",
+            "tip_split",
+            "3-recipients",
+            "tip_split",
+            "10-recipients",
+        ),
+        (
+            "withdraw vs get_withdrawable_balance",
+            "withdraw",
+            "warm",
+            "get_withdrawable_balance",
+            "warm",
+        ),
+        (
+            "create_subscription vs execute_subscription_payment",
+            "create_subscription",
+            "cold",
+            "execute_subscription_payment",
+            "warm",
+        ),
+        (
+            "execute_conditional_tip vs tip (cold)",
+            "tip",
+            "cold",
+            "execute_conditional_tip",
+            "cold",
+        ),
+        (
+            "get_leaderboard: 1 vs 10 creators",
+            "get_leaderboard",
+            "1-creator",
+            "get_leaderboard",
+            "10-creators",
+        ),
     ];
 
     for (label, base_fn, base_var, cand_fn, cand_var) in pairs {
-        let base = estimates.iter().find(|e| e.function_name == *base_fn && e.storage_variant == *base_var);
-        let cand = estimates.iter().find(|e| e.function_name == *cand_fn && e.storage_variant == *cand_var);
+        let base = estimates
+            .iter()
+            .find(|e| e.function_name == *base_fn && e.storage_variant == *base_var);
+        let cand = estimates
+            .iter()
+            .find(|e| e.function_name == *cand_fn && e.storage_variant == *cand_var);
         if let (Some(b), Some(c)) = (base, cand) {
             let delta = c.cpu_instructions as i64 - b.cpu_instructions as i64;
             let delta_pct = if b.cpu_instructions > 0 {
@@ -360,9 +420,8 @@ pub fn append_to_history(history_path: &str, report: &EstimationReport) -> std::
             suggestions: report.suggestions.clone(),
         },
     };
-    let line = serde_json::to_string(&entry).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-    })?;
+    let line = serde_json::to_string(&entry)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

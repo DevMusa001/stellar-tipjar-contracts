@@ -18,13 +18,21 @@ pub fn open(poly: &Polynomial, z: u64) -> OpeningProof {
     for i in 0..len.min(64) {
         buf[i] = poly.coeffs.get(i as u32).unwrap_or(0);
     }
-    OpeningProof { z, y: poly_eval(&buf[..len.min(64)], z) }
+    OpeningProof {
+        z,
+        y: poly_eval(&buf[..len.min(64)], z),
+    }
 }
 
 /// Verifies an opening proof against a commitment.
 ///
 /// Re-hashes the polynomial to check the commitment, then re-evaluates at z.
-pub fn verify(env: &Env, commitment: &PolyCommitment, poly: &Polynomial, proof: &OpeningProof) -> bool {
+pub fn verify(
+    env: &Env,
+    commitment: &PolyCommitment,
+    poly: &Polynomial,
+    proof: &OpeningProof,
+) -> bool {
     commit(env, poly).digest == commitment.digest && {
         let len = poly.coeffs.len() as usize;
         let mut buf = [0u64; 64];

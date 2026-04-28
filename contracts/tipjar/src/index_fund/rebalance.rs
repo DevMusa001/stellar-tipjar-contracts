@@ -32,10 +32,7 @@ pub fn rebalance(env: &Env, fund_id: u64, caller: &soroban_sdk::Address) {
 }
 
 /// Return the current allocation for each creator as a Vec of (creator, amount) pairs.
-pub fn get_allocations(
-    env: &Env,
-    fund_id: u64,
-) -> soroban_sdk::Vec<(soroban_sdk::Address, i128)> {
+pub fn get_allocations(env: &Env, fund_id: u64) -> soroban_sdk::Vec<(soroban_sdk::Address, i128)> {
     let fund = super::get_fund(env, fund_id).expect("Fund not found");
     let mut result = soroban_sdk::Vec::new(env);
     for component in fund.components.iter() {

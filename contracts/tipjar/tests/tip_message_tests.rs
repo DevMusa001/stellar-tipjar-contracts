@@ -10,11 +10,25 @@ use tipjar::{DataKey, TipJarContract, TipJarContractClient, TipJarError, TipMeta
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     setup_with_expiry(0)
 }
 
-fn setup_with_expiry(expiry_seconds: u64) -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup_with_expiry(
+    expiry_seconds: u64,
+) -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -45,7 +59,8 @@ fn test_tip_with_message_stores_metadata() {
     let (env, client, sender, creator, token) = setup();
 
     let msg = String::from_str(&env, "Great content, keep it up!");
-    let tip_index = client.tip_with_message(&sender, &creator, &token, &500i128, &Some(msg.clone()));
+    let tip_index =
+        client.tip_with_message(&sender, &creator, &token, &500i128, &Some(msg.clone()));
 
     assert_eq!(tip_index, 0);
 
@@ -168,13 +183,12 @@ fn test_storage_efficiency_tip_count_increments() {
     for i in 0u64..3 {
         client.tip_with_message(&sender, &creator, &token, &100i128, &None);
         // Verify the count key matches expected value.
-        let count: u64 = env
-            .as_contract(&client.address, || {
-                env.storage()
-                    .persistent()
-                    .get::<DataKey, u64>(&DataKey::TipCount(creator.clone()))
-                    .unwrap_or(0)
-            });
+        let count: u64 = env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .get::<DataKey, u64>(&DataKey::TipCount(creator.clone()))
+                .unwrap_or(0)
+        });
         assert_eq!(count, i + 1);
     }
 }
@@ -216,5 +230,8 @@ fn test_process_expired_tips_refunds_unclaimed_locked_tip() {
     // Sender should be refunded and lock should be removed.
     assert_eq!(token_client.balance(&sender), 1_000i128);
     let result = client.try_tip_locked(&sender, &creator, &token, &500i128, &unlock_time);
-    assert!(result.is_ok(), "locked tip should still be creatable after refund");
+    assert!(
+        result.is_ok(),
+        "locked tip should still be creatable after refund"
+    );
 }

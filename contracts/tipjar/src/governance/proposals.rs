@@ -1,6 +1,6 @@
 //! Proposal management for governance
 
-use super::{Proposal, ProposalAction, DataKey};
+use super::{DataKey, Proposal, ProposalAction};
 use soroban_sdk::{Address, Env, String, Vec};
 
 /// Create a new proposal
@@ -59,12 +59,7 @@ pub fn get_proposal_or_panic(env: &Env, proposal_id: u64) -> Proposal {
 }
 
 /// Update proposal votes
-pub fn update_proposal_votes(
-    env: &Env,
-    proposal_id: u64,
-    votes_for: i128,
-    votes_against: i128,
-) {
+pub fn update_proposal_votes(env: &Env, proposal_id: u64, votes_for: i128, votes_against: i128) {
     let mut proposal = get_proposal_or_panic(env, proposal_id);
     proposal.votes_for = votes_for;
     proposal.votes_against = votes_against;
@@ -96,7 +91,10 @@ pub fn is_proposal_active(env: &Env, proposal_id: u64) -> bool {
     let proposal = get_proposal_or_panic(env, proposal_id);
     let now = env.ledger().timestamp();
 
-    !proposal.canceled && !proposal.executed && now >= proposal.start_time && now <= proposal.end_time
+    !proposal.canceled
+        && !proposal.executed
+        && now >= proposal.start_time
+        && now <= proposal.end_time
 }
 
 /// Check if proposal has passed

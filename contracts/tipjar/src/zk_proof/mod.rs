@@ -204,9 +204,7 @@ pub fn register_circuit(
         registered_at: env.ledger().timestamp(),
     };
 
-    env.storage()
-        .persistent()
-        .set(&DataKey::ZkCircuit(id), &vk);
+    env.storage().persistent().set(&DataKey::ZkCircuit(id), &vk);
 
     // Track circuits per owner
     let mut owner_circuits: Vec<u64> = env
@@ -219,10 +217,8 @@ pub fn register_circuit(
         .persistent()
         .set(&DataKey::ZkOwnerCircuits(owner.clone()), &owner_circuits);
 
-    env.events().publish(
-        (symbol_short!("zk_reg"),),
-        (id, owner.clone(), vk_hash),
-    );
+    env.events()
+        .publish((symbol_short!("zk_reg"),), (id, owner.clone(), vk_hash));
 
     id
 }
@@ -240,10 +236,8 @@ pub fn deactivate_circuit(env: &Env, circuit_id: u64) {
         .persistent()
         .set(&DataKey::ZkCircuit(circuit_id), &vk);
 
-    env.events().publish(
-        (symbol_short!("zk_deact"),),
-        (circuit_id,),
-    );
+    env.events()
+        .publish((symbol_short!("zk_deact"),), (circuit_id,));
 }
 
 // ── Proof submission & verification ──────────────────────────────────────────
@@ -343,7 +337,10 @@ pub fn verify_proof(env: &Env, proof_id: u64, is_valid: bool) {
         .get(&DataKey::ZkProof(proof_id))
         .expect("Proof not found");
 
-    assert!(proof.status == ProofStatus::Pending, "Proof already processed");
+    assert!(
+        proof.status == ProofStatus::Pending,
+        "Proof already processed"
+    );
 
     proof.status = if is_valid {
         ProofStatus::Verified
@@ -356,10 +353,8 @@ pub fn verify_proof(env: &Env, proof_id: u64, is_valid: bool) {
         .persistent()
         .set(&DataKey::ZkProof(proof_id), &proof);
 
-    env.events().publish(
-        (symbol_short!("zk_ver"),),
-        (proof_id, is_valid),
-    );
+    env.events()
+        .publish((symbol_short!("zk_ver"),), (proof_id, is_valid));
 }
 
 /// Revokes a proof. Admin only.
@@ -376,10 +371,8 @@ pub fn revoke_proof(env: &Env, proof_id: u64) {
         .persistent()
         .set(&DataKey::ZkProof(proof_id), &proof);
 
-    env.events().publish(
-        (symbol_short!("zk_rvk"),),
-        (proof_id,),
-    );
+    env.events()
+        .publish((symbol_short!("zk_rvk"),), (proof_id,));
 }
 
 // ── Private tips with ZK proofs ──────────────────────────────────────────────
@@ -429,14 +422,13 @@ pub fn create_private_tip(
         .get(&DataKey::ZkCreatorPrivateTips(creator.clone()))
         .unwrap_or_else(|| Vec::new(env));
     creator_tips.push_back(id);
-    env.storage()
-        .persistent()
-        .set(&DataKey::ZkCreatorPrivateTips(creator.clone()), &creator_tips);
-
-    env.events().publish(
-        (symbol_short!("zk_ptip"),),
-        (id, creator.clone(), proof_id),
+    env.storage().persistent().set(
+        &DataKey::ZkCreatorPrivateTips(creator.clone()),
+        &creator_tips,
     );
+
+    env.events()
+        .publish((symbol_short!("zk_ptip"),), (id, creator.clone(), proof_id));
 
     id
 }
@@ -456,10 +448,8 @@ pub fn claim_private_tip(env: &Env, tip_id: u64) {
         .persistent()
         .set(&DataKey::ZkPrivateTip(tip_id), &tip);
 
-    env.events().publish(
-        (symbol_short!("zk_clm"),),
-        (tip_id, tip.creator.clone()),
-    );
+    env.events()
+        .publish((symbol_short!("zk_clm"),), (tip_id, tip.creator.clone()));
 }
 
 // ── Nullifier management ─────────────────────────────────────────────────────

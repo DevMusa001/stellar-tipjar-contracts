@@ -51,9 +51,7 @@ pub fn calculate_premium(
     );
 
     // Total premium is intrinsic + time value
-    let total_premium = intrinsic_value
-        .checked_add(time_value)
-        .unwrap_or(i128::MAX);
+    let total_premium = intrinsic_value.checked_add(time_value).unwrap_or(i128::MAX);
 
     // Apply min/max bounds
     let min_premium = (strike_price * amount * params.min_premium_bps as i128) / 10_000_000_000;
@@ -90,10 +88,7 @@ fn calculate_intrinsic_value(
         }
     };
 
-    value_per_unit
-        .checked_mul(amount)
-        .unwrap_or(i128::MAX)
-        / 1_000_000 // Normalize for precision
+    value_per_unit.checked_mul(amount).unwrap_or(i128::MAX) / 1_000_000 // Normalize for precision
 }
 
 /// Calculate time value of an option
@@ -139,11 +134,8 @@ fn calculate_time_value(
     // Base time value calculation
     // time_value = spot * amount * volatility * sqrt(time) * atm_adjustment
     // Simplified: time_value = spot * amount * volatility * time_factor * atm_adjustment / 100_000_000
-    
-    let base_value = spot_price
-        .checked_mul(amount)
-        .unwrap_or(i128::MAX)
-        / 1_000_000; // Normalize
+
+    let base_value = spot_price.checked_mul(amount).unwrap_or(i128::MAX) / 1_000_000; // Normalize
 
     let volatility_adjusted = base_value
         .checked_mul(params.volatility_bps as i128)
@@ -186,10 +178,7 @@ pub fn calculate_payoff(
 ///
 /// This is a simplified estimation that could be enhanced with
 /// more sophisticated algorithms in the future.
-pub fn estimate_volatility(
-    recent_prices: &[i128],
-    window_seconds: u64,
-) -> u32 {
+pub fn estimate_volatility(recent_prices: &[i128], window_seconds: u64) -> u32 {
     if recent_prices.len() < 2 {
         return DEFAULT_VOLATILITY_BPS;
     }
@@ -201,7 +190,7 @@ pub fn estimate_volatility(
     for i in 1..recent_prices.len() {
         let prev = recent_prices[i - 1];
         let curr = recent_prices[i];
-        
+
         if prev > 0 {
             // Calculate return as (curr - prev) / prev
             let return_val = ((curr - prev) * 10_000) / prev;
@@ -217,7 +206,7 @@ pub fn estimate_volatility(
 
     // Variance = average of squared returns
     let variance = sum_squared_returns / count;
-    
+
     // Annualize the variance
     let periods_per_year = 31_557_600 / window_seconds.max(1);
     let annualized_variance = variance.saturating_mul(periods_per_year as i128);
@@ -270,40 +259,25 @@ mod tests {
         // Call option: spot > strike
         let value = calculate_intrinsic_value(
             OptionType::Call,
-            1_200_000, // spot
-            1_000_000, // strike
+            1_200_000,  // spot
+            1_000_000,  // strike
             10_000_000, // amount
         );
         assert!(value > 0);
 
         // Call option: spot < strike (out of money)
-        let value = calculate_intrinsic_value(
-            OptionType::Call,
-            800_000,
-            1_000_000,
-            10_000_000,
-        );
+        let value = calculate_intrinsic_value(OptionType::Call, 800_000, 1_000_000, 10_000_000);
         assert_eq!(value, 0);
     }
 
     #[test]
     fn test_intrinsic_value_put() {
         // Put option: strike > spot
-        let value = calculate_intrinsic_value(
-            OptionType::Put,
-            800_000,
-            1_000_000,
-            10_000_000,
-        );
+        let value = calculate_intrinsic_value(OptionType::Put, 800_000, 1_000_000, 10_000_000);
         assert!(value > 0);
 
         // Put option: strike < spot (out of money)
-        let value = calculate_intrinsic_value(
-            OptionType::Put,
-            1_200_000,
-            1_000_000,
-            10_000_000,
-        );
+        let value = calculate_intrinsic_value(OptionType::Put, 1_200_000, 1_000_000, 10_000_000);
         assert_eq!(value, 0);
     }
 
@@ -311,7 +285,7 @@ mod tests {
     fn test_approximate_sqrt() {
         assert_eq!(approximate_sqrt(0), 0);
         assert_eq!(approximate_sqrt(1), 10_000);
-        
+
         let sqrt_4 = approximate_sqrt(4);
         assert!(sqrt_4 >= 1 && sqrt_4 <= 3);
     }

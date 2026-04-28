@@ -1,9 +1,8 @@
 /// Enhanced Circuit Breaker System
-/// 
+///
 /// This module provides sophisticated automated protection against extreme market volatility,
 /// anomalous trading patterns, and potential attacks within the Stellar tipjar contracts.
-
-use soroban_sdk::{contracttype, contracterror};
+use soroban_sdk::{contracterror, contracttype};
 
 /// Enhanced circuit breaker configuration with comprehensive protection parameters
 #[contracttype]
@@ -12,7 +11,7 @@ pub struct EnhancedCircuitBreakerConfig {
     // Single tip thresholds
     /// Maximum amount for a single tip before triggering immediate halt
     pub max_single_tip: i128,
-    
+
     // Volume thresholds for different time windows
     /// Maximum volume allowed in a 1-minute sliding window
     pub one_minute_threshold: i128,
@@ -22,13 +21,13 @@ pub struct EnhancedCircuitBreakerConfig {
     pub one_hour_threshold: i128,
     /// Maximum volume allowed in a 24-hour sliding window
     pub twenty_four_hour_threshold: i128,
-    
+
     // Rate limiting parameters
     /// Maximum number of tips allowed per minute globally
     pub max_tips_per_minute: u32,
     /// Maximum number of tips per creator per minute
     pub max_tips_per_creator_per_min: u32,
-    
+
     // Anomaly detection parameters
     /// Whether advanced anomaly detection is enabled
     pub anomaly_detection_enabled: bool,
@@ -36,7 +35,7 @@ pub struct EnhancedCircuitBreakerConfig {
     pub anomaly_confidence_threshold: u32,
     /// Whether pattern analysis for coordinated attacks is enabled
     pub pattern_analysis_enabled: bool,
-    
+
     // Cooldown configuration
     /// Base cooldown duration in seconds for standard triggers
     pub base_cooldown_seconds: u64,
@@ -46,7 +45,7 @@ pub struct EnhancedCircuitBreakerConfig {
     pub exponential_backoff_enabled: bool,
     /// Backoff multiplier in basis points (e.g., 15000 = 1.5x multiplier)
     pub backoff_multiplier: u32,
-    
+
     // System control flags
     /// Whether the circuit breaker system is enabled
     pub enabled: bool,
@@ -111,7 +110,7 @@ pub enum CircuitBreakerError {
 
 impl EnhancedCircuitBreakerConfig {
     /// Validates all configuration parameters for correctness and consistency
-    /// 
+    ///
     /// Returns Ok(()) if configuration is valid, or Err with specific error code
     pub fn validate(&self) -> Result<(), CircuitBreakerError> {
         // Validate single tip threshold
@@ -178,20 +177,20 @@ impl EnhancedCircuitBreakerConfig {
     /// Creates a default configuration with conservative settings
     pub fn default_config() -> Self {
         Self {
-            max_single_tip: 1_000_000_000, // 1 billion stroops (100 XLM)
-            one_minute_threshold: 10_000_000_000,    // 1,000 XLM per minute
-            five_minute_threshold: 40_000_000_000,   // 4,000 XLM per 5 minutes
-            one_hour_threshold: 200_000_000_000,     // 20,000 XLM per hour
+            max_single_tip: 1_000_000_000,         // 1 billion stroops (100 XLM)
+            one_minute_threshold: 10_000_000_000,  // 1,000 XLM per minute
+            five_minute_threshold: 40_000_000_000, // 4,000 XLM per 5 minutes
+            one_hour_threshold: 200_000_000_000,   // 20,000 XLM per hour
             twenty_four_hour_threshold: 2_000_000_000_000, // 200,000 XLM per day
             max_tips_per_minute: 1000,
             max_tips_per_creator_per_min: 100,
             anomaly_detection_enabled: true,
             anomaly_confidence_threshold: 7500, // 75%
             pattern_analysis_enabled: true,
-            base_cooldown_seconds: 300,     // 5 minutes
-            max_cooldown_seconds: 86400,    // 24 hours
+            base_cooldown_seconds: 300,  // 5 minutes
+            max_cooldown_seconds: 86400, // 24 hours
             exponential_backoff_enabled: true,
-            backoff_multiplier: 15000,      // 1.5x multiplier
+            backoff_multiplier: 15000, // 1.5x multiplier
             enabled: true,
             emergency_mode: false,
             maintenance_mode: false,
@@ -232,9 +231,9 @@ impl VolumeThresholds {
     /// Creates default volume thresholds with conservative limits
     pub fn default_config() -> Self {
         Self {
-            one_minute_threshold: 10_000_000_000,    // 1,000 XLM per minute
-            five_minute_threshold: 40_000_000_000,   // 4,000 XLM per 5 minutes
-            one_hour_threshold: 200_000_000_000,     // 20,000 XLM per hour
+            one_minute_threshold: 10_000_000_000,  // 1,000 XLM per minute
+            five_minute_threshold: 40_000_000_000, // 4,000 XLM per 5 minutes
+            one_hour_threshold: 200_000_000_000,   // 20,000 XLM per hour
             twenty_four_hour_threshold: 2_000_000_000_000, // 200,000 XLM per day
             percentage_based_enabled: true,
             historical_multiplier: 20000, // 200% above historical average
@@ -265,10 +264,10 @@ impl CooldownConfig {
     /// Creates default cooldown configuration
     pub fn default_config() -> Self {
         Self {
-            base_cooldown_seconds: 300,     // 5 minutes
-            max_cooldown_seconds: 86400,    // 24 hours
+            base_cooldown_seconds: 300,  // 5 minutes
+            max_cooldown_seconds: 86400, // 24 hours
             exponential_backoff_enabled: true,
-            backoff_multiplier: 15000,      // 1.5x multiplier
+            backoff_multiplier: 15000, // 1.5x multiplier
         }
     }
 }
@@ -394,7 +393,7 @@ pub struct EnhancedCircuitBreakerState {
     pub halt_reason: Option<TriggerType>,
     /// Severity of current halt (if any)
     pub halt_severity: Option<TriggerSeverity>,
-    
+
     /// Volume tracking for 1-minute window
     pub one_minute_window: VolumeWindow,
     /// Volume tracking for 5-minute window
@@ -403,18 +402,18 @@ pub struct EnhancedCircuitBreakerState {
     pub one_hour_window: VolumeWindow,
     /// Volume tracking for 24-hour window
     pub twenty_four_hour_window: VolumeWindow,
-    
+
     /// Rate limiting state
     pub rate_limit_state: RateLimitState,
-    
+
     /// Total number of times circuit breaker has been triggered
     pub trigger_count: u32,
     /// Timestamp of last trigger
     pub last_trigger_time: u64,
-    
+
     /// Anomaly detection state (optional, only if enabled)
     pub anomaly_state: Option<AnomalyDetectionState>,
-    
+
     /// Total number of halts
     pub total_halts: u32,
     /// Total duration of all halts (seconds)
@@ -483,14 +482,13 @@ impl EnhancedCircuitBreakerState {
     }
 }
 
-
 /// Circuit breaker trigger engine for detecting anomalies and enforcing halts
 pub mod trigger_engine {
     use super::*;
     use soroban_sdk::{Address, Env};
 
     /// Checks if a single tip amount exceeds configured thresholds
-    /// 
+    ///
     /// Returns Some(TriggerSeverity) if threshold is exceeded, None otherwise
     pub fn check_single_tip_spike(
         config: &EnhancedCircuitBreakerConfig,
@@ -511,7 +509,7 @@ pub mod trigger_engine {
     }
 
     /// Checks creator-specific limits if configured
-    /// 
+    ///
     /// Returns Some(TriggerSeverity) if creator-specific limit is exceeded
     pub fn check_creator_specific_limit(
         _env: &Env,
@@ -528,7 +526,7 @@ pub mod trigger_engine {
     }
 
     /// Checks token-specific limits if configured
-    /// 
+    ///
     /// Returns Some(TriggerSeverity) if token-specific limit is exceeded
     pub fn check_token_specific_limit(
         _env: &Env,
@@ -545,7 +543,7 @@ pub mod trigger_engine {
     }
 
     /// Triggers an immediate halt for spike conditions
-    /// 
+    ///
     /// Updates state with halt information and calculates cooldown period
     pub fn trigger_immediate_halt(
         state: &mut EnhancedCircuitBreakerState,
@@ -555,7 +553,7 @@ pub mod trigger_engine {
         current_time: u64,
     ) {
         let cooldown = calculate_cooldown(config, severity, state.trigger_count);
-        
+
         state.halted_until = current_time.saturating_add(cooldown);
         state.halt_reason = Some(trigger_type);
         state.halt_severity = Some(severity);
@@ -582,21 +580,23 @@ pub mod trigger_engine {
             // Apply exponential backoff: cooldown * (multiplier ^ trigger_count)
             let multiplier = config.backoff_multiplier as u64;
             let mut adjusted = base_cooldown;
-            
-            for _ in 0..trigger_count.min(5) { // Cap at 5 iterations to prevent overflow
+
+            for _ in 0..trigger_count.min(5) {
+                // Cap at 5 iterations to prevent overflow
                 adjusted = adjusted.saturating_mul(multiplier) / 10000;
             }
-            
+
             adjusted
         } else {
             base_cooldown
         };
 
         // Ensure cooldown is within configured bounds
-        cooldown.min(config.max_cooldown_seconds).max(config.base_cooldown_seconds)
+        cooldown
+            .min(config.max_cooldown_seconds)
+            .max(config.base_cooldown_seconds)
     }
 }
-
 
 /// Volume tracking and monitoring module
 pub mod volume_tracker {
@@ -651,19 +651,24 @@ pub mod volume_tracker {
     ) {
         // Update 1-minute window
         update_volume_window(&mut state.one_minute_window, amount, current_time, 60);
-        
+
         // Update 5-minute window
         update_volume_window(&mut state.five_minute_window, amount, current_time, 300);
-        
+
         // Update 1-hour window
         update_volume_window(&mut state.one_hour_window, amount, current_time, 3600);
-        
+
         // Update 24-hour window
-        update_volume_window(&mut state.twenty_four_hour_window, amount, current_time, 86400);
+        update_volume_window(
+            &mut state.twenty_four_hour_window,
+            amount,
+            current_time,
+            86400,
+        );
     }
 
     /// Checks all volume windows against configured thresholds
-    /// 
+    ///
     /// Returns Some((TriggerType, TriggerSeverity)) if any threshold is exceeded
     pub fn check_all_volume_thresholds(
         state: &EnhancedCircuitBreakerState,
@@ -726,10 +731,7 @@ pub mod volume_tracker {
     }
 
     /// Calculates percentage-based threshold relative to historical average
-    pub fn calculate_percentage_threshold(
-        historical_average: i128,
-        multiplier_bps: u32,
-    ) -> i128 {
+    pub fn calculate_percentage_threshold(historical_average: i128, multiplier_bps: u32) -> i128 {
         // multiplier_bps is in basis points (e.g., 20000 = 200% above average)
         historical_average.saturating_mul(multiplier_bps as i128) / 10000
     }
@@ -767,16 +769,12 @@ pub mod volume_tracker {
     }
 }
 
-
 /// Rate limiting module for tip frequency control
 pub mod rate_limiter {
     use super::*;
 
     /// Updates rate limit state with new tip
-    pub fn update_rate_limit_state(
-        state: &mut RateLimitState,
-        current_time: u64,
-    ) {
+    pub fn update_rate_limit_state(state: &mut RateLimitState, current_time: u64) {
         // Check if we need to start a new minute window
         if current_time >= state.current_minute_start.saturating_add(60) {
             // Start new minute
@@ -828,14 +826,13 @@ pub mod rate_limiter {
     }
 }
 
-
 /// Advanced anomaly detection module
 pub mod anomaly_detector {
     use super::*;
     use soroban_sdk::Address;
 
     /// Calculates sender clustering score
-    /// 
+    ///
     /// Detects if tips are coming from a small set of related addresses
     /// Returns score in basis points (0-10000)
     pub fn calculate_sender_clustering_score(
@@ -872,7 +869,7 @@ pub mod anomaly_detector {
     }
 
     /// Calculates velocity anomaly score
-    /// 
+    ///
     /// Detects unusual tip frequency patterns
     /// Returns score in basis points (0-10000)
     pub fn calculate_velocity_anomaly_score(
@@ -888,7 +885,7 @@ pub mod anomaly_detector {
         if current_rate > historical_average {
             let excess = current_rate - historical_average;
             let ratio = excess * 10000 / historical_average;
-            
+
             // Score increases as we exceed the deviation threshold
             if ratio > deviation_threshold {
                 ((ratio - deviation_threshold) * 10000 / deviation_threshold).min(10000)
@@ -901,7 +898,7 @@ pub mod anomaly_detector {
     }
 
     /// Calculates amount deviation score
-    /// 
+    ///
     /// Detects tips with amounts that deviate significantly from historical patterns
     /// Returns score in basis points (0-10000)
     pub fn calculate_amount_deviation_score(
@@ -943,10 +940,12 @@ pub mod anomaly_detector {
         if let Some(anomaly_state) = state {
             // Update historical statistics
             let stats = &mut anomaly_state.historical_stats;
-            
+
             // Simple moving average update
             let new_sample_count = stats.sample_count.saturating_add(1);
-            let total = stats.average_tip_amount.saturating_mul(stats.sample_count as i128);
+            let total = stats
+                .average_tip_amount
+                .saturating_mul(stats.sample_count as i128);
             stats.average_tip_amount = total.saturating_add(amount) / new_sample_count as i128;
             stats.sample_count = new_sample_count;
             stats.last_update = current_time;
@@ -970,10 +969,11 @@ pub mod anomaly_detector {
     ) -> u32 {
         // Weighted average of anomaly scores
         // Sender clustering: 40%, Velocity: 30%, Amount: 30%
-        let weighted_sum = sender_clustering.saturating_mul(40)
+        let weighted_sum = sender_clustering
+            .saturating_mul(40)
             .saturating_add(velocity_anomaly.saturating_mul(30))
             .saturating_add(amount_deviation.saturating_mul(30));
-        
+
         weighted_sum / 100
     }
 
@@ -1024,17 +1024,12 @@ pub mod anomaly_detector {
     }
 }
 
-
 /// Rolling statistics module for historical pattern tracking
 pub mod statistics {
     use super::*;
 
     /// Updates rolling statistics with new tip data
-    pub fn update_rolling_statistics(
-        stats: &mut HistoricalStats,
-        amount: i128,
-        current_time: u64,
-    ) {
+    pub fn update_rolling_statistics(stats: &mut HistoricalStats, amount: i128, current_time: u64) {
         let old_count = stats.sample_count;
         let new_count = old_count.saturating_add(1);
 
@@ -1046,11 +1041,13 @@ pub mod statistics {
         // Update standard deviation using Welford's online algorithm
         if old_count > 0 {
             let delta2 = amount - stats.average_tip_amount;
-            let variance_sum = stats.standard_deviation.saturating_mul(stats.standard_deviation)
+            let variance_sum = stats
+                .standard_deviation
+                .saturating_mul(stats.standard_deviation)
                 .saturating_mul(old_count as i128);
             let new_variance_sum = variance_sum.saturating_add(delta.saturating_mul(delta2));
             let new_variance = new_variance_sum / new_count as i128;
-            
+
             // Calculate square root approximation for standard deviation
             stats.standard_deviation = sqrt_approx(new_variance);
         }
@@ -1094,28 +1091,24 @@ pub mod statistics {
         }
 
         let rate = tips_in_window / window_duration_minutes;
-        
+
         // Exponential moving average for tip rate
         if stats.average_tips_per_minute == 0 {
             stats.average_tips_per_minute = rate;
         } else {
             // EMA with alpha = 0.2
-            stats.average_tips_per_minute = 
-                (stats.average_tips_per_minute * 4 + rate) / 5;
+            stats.average_tips_per_minute = (stats.average_tips_per_minute * 4 + rate) / 5;
         }
     }
 
     /// Updates unique sender statistics
-    pub fn update_sender_stats(
-        stats: &mut HistoricalStats,
-        unique_senders: u32,
-    ) {
+    pub fn update_sender_stats(stats: &mut HistoricalStats, unique_senders: u32) {
         // Exponential moving average for unique senders
         if stats.unique_senders_per_hour == 0 {
             stats.unique_senders_per_hour = unique_senders;
         } else {
             // EMA with alpha = 0.2
-            stats.unique_senders_per_hour = 
+            stats.unique_senders_per_hour =
                 (stats.unique_senders_per_hour * 4 + unique_senders) / 5;
         }
     }
@@ -1154,14 +1147,13 @@ pub mod statistics {
     }
 }
 
-
 /// Pattern analysis module for detecting coordinated attacks
 pub mod pattern_analyzer {
     use super::*;
     use soroban_sdk::Address;
 
     /// Analyzes tip velocity for a specific creator
-    /// 
+    ///
     /// Returns anomaly score in basis points (0-10000)
     pub fn analyze_creator_velocity(
         creator_tip_count: u32,
@@ -1197,7 +1189,7 @@ pub mod pattern_analyzer {
     }
 
     /// Detects sequential tips from potentially related addresses
-    /// 
+    ///
     /// Returns true if suspicious pattern detected
     pub fn detect_sequential_pattern(
         recent_senders: &[Address],
@@ -1213,7 +1205,7 @@ pub mod pattern_analyzer {
         // Check for rapid sequential tips
         for i in 1..recent_timestamps.len().min(10) {
             let time_gap = recent_timestamps[i] - recent_timestamps[i - 1];
-            
+
             if time_gap < max_time_gap {
                 sequential_count += 1;
             }
@@ -1259,18 +1251,14 @@ pub mod pattern_analyzer {
     }
 
     /// Analyzes correlation with external market events
-    /// 
+    ///
     /// This is a placeholder for future integration with oracle data
-    pub fn analyze_market_correlation(
-        _tip_volume: i128,
-        _time_window: u64,
-    ) -> u32 {
+    pub fn analyze_market_correlation(_tip_volume: i128, _time_window: u64) -> u32 {
         // TODO: Integrate with price oracle to detect correlation
         // with market volatility or price movements
         0
     }
 }
-
 
 /// Halt state management module
 pub mod halt_manager {
@@ -1285,8 +1273,9 @@ pub mod halt_manager {
         severity: TriggerSeverity,
         current_time: u64,
     ) {
-        let cooldown = super::trigger_engine::calculate_cooldown(config, severity, state.trigger_count);
-        
+        let cooldown =
+            super::trigger_engine::calculate_cooldown(config, severity, state.trigger_count);
+
         state.halted_until = current_time.saturating_add(cooldown);
         state.halt_reason = Some(trigger_type);
         state.halt_severity = Some(severity);
@@ -1305,17 +1294,14 @@ pub mod halt_manager {
     }
 
     /// Performs automatic recovery after cooldown expires
-    pub fn perform_automatic_recovery(
-        state: &mut EnhancedCircuitBreakerState,
-        current_time: u64,
-    ) {
+    pub fn perform_automatic_recovery(state: &mut EnhancedCircuitBreakerState, current_time: u64) {
         state.halted_until = 0;
         state.halt_reason = None;
         state.halt_severity = None;
-        
+
         // Reset volume counters
         super::volume_tracker::reset_volume_counters(state, current_time);
-        
+
         // Reset rate limit state
         super::rate_limiter::reset_rate_limit_state(state, current_time);
     }
@@ -1344,8 +1330,13 @@ pub mod halt_manager {
     ) -> (bool, Option<TriggerType>, Option<TriggerSeverity>, u64) {
         let is_halted = state.is_halted(current_time);
         let remaining = state.remaining_cooldown(current_time);
-        
-        (is_halted, state.halt_reason.clone(), state.halt_severity, remaining)
+
+        (
+            is_halted,
+            state.halt_reason.clone(),
+            state.halt_severity,
+            remaining,
+        )
     }
 
     /// Extends existing halt period
@@ -1360,11 +1351,10 @@ pub mod halt_manager {
 
         state.halted_until = state.halted_until.saturating_add(additional_seconds);
         state.total_halt_duration = state.total_halt_duration.saturating_add(additional_seconds);
-        
+
         Ok(())
     }
 }
-
 
 /// Cooldown period management module
 pub mod cooldown_manager {
@@ -1419,20 +1409,17 @@ pub mod cooldown_manager {
 
         let multiplier = multiplier_bps as u64;
         let mut adjusted = base_cooldown;
-        
+
         // Apply multiplier for each recent trigger (cap at 5 to prevent overflow)
         for _ in 0..trigger_count.min(5) {
             adjusted = adjusted.saturating_mul(multiplier) / 10000;
         }
-        
+
         adjusted
     }
 
     /// Enforces minimum and maximum cooldown bounds
-    fn enforce_cooldown_bounds(
-        cooldown: u64,
-        config: &EnhancedCircuitBreakerConfig,
-    ) -> u64 {
+    fn enforce_cooldown_bounds(cooldown: u64, config: &EnhancedCircuitBreakerConfig) -> u64 {
         cooldown
             .max(config.base_cooldown_seconds)
             .min(config.max_cooldown_seconds)
@@ -1468,11 +1455,10 @@ pub mod cooldown_manager {
 
         let stage_duration = total_cooldown / recovery_stages as u64;
         let current_stage = elapsed_time / stage_duration;
-        
+
         current_stage.min(recovery_stages as u64) as u32
     }
 }
-
 
 /// Error handling and state preservation module
 pub mod error_handler {
@@ -1523,9 +1509,13 @@ pub mod error_handler {
         match &state.halt_reason {
             Some(TriggerType::SingleTipSpike) => HaltErrorCode::SingleTipSpike,
             Some(TriggerType::VolumeSpike(TimeWindow::OneMinute)) => HaltErrorCode::VolumeSpike1Min,
-            Some(TriggerType::VolumeSpike(TimeWindow::FiveMinutes)) => HaltErrorCode::VolumeSpike5Min,
+            Some(TriggerType::VolumeSpike(TimeWindow::FiveMinutes)) => {
+                HaltErrorCode::VolumeSpike5Min
+            }
             Some(TriggerType::VolumeSpike(TimeWindow::OneHour)) => HaltErrorCode::VolumeSpike1Hour,
-            Some(TriggerType::VolumeSpike(TimeWindow::TwentyFourHours)) => HaltErrorCode::VolumeSpike24Hour,
+            Some(TriggerType::VolumeSpike(TimeWindow::TwentyFourHours)) => {
+                HaltErrorCode::VolumeSpike24Hour
+            }
             Some(TriggerType::RateLimit) => HaltErrorCode::RateLimitExceeded,
             Some(TriggerType::AnomalyDetection) => HaltErrorCode::AnomalyDetected,
             Some(TriggerType::PatternAnalysis) => HaltErrorCode::SuspiciousPattern,
@@ -1536,7 +1526,9 @@ pub mod error_handler {
     }
 
     /// Validates state integrity during initialization
-    pub fn validate_state_integrity(state: &EnhancedCircuitBreakerState) -> Result<(), CircuitBreakerError> {
+    pub fn validate_state_integrity(
+        state: &EnhancedCircuitBreakerState,
+    ) -> Result<(), CircuitBreakerError> {
         // Check for logical consistency
         if state.halted_until > 0 && state.halt_reason.is_none() {
             return Err(CircuitBreakerError::InvalidConfiguration);
@@ -1562,9 +1554,7 @@ pub mod error_handler {
     }
 
     /// Preserves balances and state during halt periods
-    pub fn ensure_state_preservation(
-        _state: &EnhancedCircuitBreakerState,
-    ) -> bool {
+    pub fn ensure_state_preservation(_state: &EnhancedCircuitBreakerState) -> bool {
         // State preservation is guaranteed by not modifying any balance or
         // user state during halt periods. This function serves as a validation point.
         true
@@ -1582,14 +1572,13 @@ pub mod error_handler {
     }
 }
 
-
 /// Administrative interface for circuit breaker management
 pub mod admin {
     use super::*;
     use soroban_sdk::{Address, Env};
 
     /// Sets enhanced circuit breaker configuration
-    /// 
+    ///
     /// Validates configuration before applying
     pub fn set_enhanced_config(
         env: &Env,
@@ -1603,10 +1592,9 @@ pub mod admin {
         config.validate()?;
 
         // Store configuration
-        env.storage().instance().set(
-            &super::CircuitBreakerKey::EnhancedConfig,
-            config
-        );
+        env.storage()
+            .instance()
+            .set(&super::CircuitBreakerKey::EnhancedConfig, config);
 
         // Emit configuration update event
         env.events().publish(
@@ -1619,7 +1607,9 @@ pub mod admin {
 
     /// Gets current enhanced configuration
     pub fn get_enhanced_config(env: &Env) -> Option<EnhancedCircuitBreakerConfig> {
-        env.storage().instance().get(&super::CircuitBreakerKey::EnhancedConfig)
+        env.storage()
+            .instance()
+            .get(&super::CircuitBreakerKey::EnhancedConfig)
     }
 
     /// Sets creator-specific limit override
@@ -1637,7 +1627,7 @@ pub mod admin {
 
         env.storage().persistent().set(
             &super::CircuitBreakerKey::CreatorOverrides(creator.clone()),
-            &limit
+            &limit,
         );
 
         env.events().publish(
@@ -1649,28 +1639,22 @@ pub mod admin {
     }
 
     /// Removes creator-specific limit override
-    pub fn remove_creator_limit(
-        env: &Env,
-        admin: &Address,
-        creator: &Address,
-    ) {
+    pub fn remove_creator_limit(env: &Env, admin: &Address, creator: &Address) {
         admin.require_auth();
 
-        env.storage().persistent().remove(
-            &super::CircuitBreakerKey::CreatorOverrides(creator.clone())
-        );
+        env.storage()
+            .persistent()
+            .remove(&super::CircuitBreakerKey::CreatorOverrides(creator.clone()));
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("cb_crrm"), creator.clone()),
-            (),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("cb_crrm"), creator.clone()), ());
     }
 
     /// Gets creator-specific limit
     pub fn get_creator_limit(env: &Env, creator: &Address) -> Option<i128> {
-        env.storage().persistent().get(
-            &super::CircuitBreakerKey::CreatorOverrides(creator.clone())
-        )
+        env.storage()
+            .persistent()
+            .get(&super::CircuitBreakerKey::CreatorOverrides(creator.clone()))
     }
 
     /// Sets token-specific limit
@@ -1688,7 +1672,7 @@ pub mod admin {
 
         env.storage().persistent().set(
             &super::CircuitBreakerKey::TokenLimits(token.clone()),
-            &limit
+            &limit,
         );
 
         env.events().publish(
@@ -1701,12 +1685,11 @@ pub mod admin {
 
     /// Gets token-specific limit
     pub fn get_token_limit(env: &Env, token: &Address) -> Option<i128> {
-        env.storage().persistent().get(
-            &super::CircuitBreakerKey::TokenLimits(token.clone())
-        )
+        env.storage()
+            .persistent()
+            .get(&super::CircuitBreakerKey::TokenLimits(token.clone()))
     }
 }
-
 
 /// Manual override capabilities for administrative control
 pub mod manual_override {
@@ -1725,7 +1708,7 @@ pub mod manual_override {
         admin.require_auth();
 
         let current_time = env.ledger().timestamp();
-        
+
         super::halt_manager::activate_halt(
             state,
             config,
@@ -1791,7 +1774,7 @@ pub mod manual_override {
         admin.require_auth();
 
         let current_time = env.ledger().timestamp();
-        
+
         super::halt_manager::extend_halt(state, additional_seconds, current_time)?;
 
         // Emit extension event
@@ -1803,7 +1786,6 @@ pub mod manual_override {
         Ok(())
     }
 }
-
 
 /// Emergency and maintenance mode management
 pub mod emergency_mode {
@@ -1821,10 +1803,9 @@ pub mod emergency_mode {
 
         config.emergency_mode = true;
 
-        env.storage().instance().set(
-            &super::CircuitBreakerKey::EnhancedConfig,
-            config
-        );
+        env.storage()
+            .instance()
+            .set(&super::CircuitBreakerKey::EnhancedConfig, config);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("cb_emerg"), admin.clone()),
@@ -1842,15 +1823,12 @@ pub mod emergency_mode {
 
         config.emergency_mode = false;
 
-        env.storage().instance().set(
-            &super::CircuitBreakerKey::EnhancedConfig,
-            config
-        );
+        env.storage()
+            .instance()
+            .set(&super::CircuitBreakerKey::EnhancedConfig, config);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("cb_emoff"), admin.clone()),
-            (),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("cb_emoff"), admin.clone()), ());
     }
 
     /// Enables maintenance mode
@@ -1863,15 +1841,12 @@ pub mod emergency_mode {
 
         config.maintenance_mode = true;
 
-        env.storage().instance().set(
-            &super::CircuitBreakerKey::EnhancedConfig,
-            config
-        );
+        env.storage()
+            .instance()
+            .set(&super::CircuitBreakerKey::EnhancedConfig, config);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("cb_maint"), admin.clone()),
-            (),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("cb_maint"), admin.clone()), ());
     }
 
     /// Disables maintenance mode
@@ -1884,15 +1859,12 @@ pub mod emergency_mode {
 
         config.maintenance_mode = false;
 
-        env.storage().instance().set(
-            &super::CircuitBreakerKey::EnhancedConfig,
-            config
-        );
+        env.storage()
+            .instance()
+            .set(&super::CircuitBreakerKey::EnhancedConfig, config);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("cb_mtoff"), admin.clone()),
-            (),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("cb_mtoff"), admin.clone()), ());
     }
 
     /// Checks if system is in emergency or maintenance mode
@@ -1900,7 +1872,6 @@ pub mod emergency_mode {
         config.emergency_mode || config.maintenance_mode
     }
 }
-
 
 /// Query interface for external systems
 pub mod query {
@@ -1937,12 +1908,9 @@ pub mod query {
     }
 
     /// Gets comprehensive halt status
-    pub fn get_halt_status(
-        env: &Env,
-        state: &EnhancedCircuitBreakerState,
-    ) -> HaltStatusResult {
+    pub fn get_halt_status(env: &Env, state: &EnhancedCircuitBreakerState) -> HaltStatusResult {
         let current_time = env.ledger().timestamp();
-        let (is_halted, reason, severity, remaining) = 
+        let (is_halted, reason, severity, remaining) =
             super::halt_manager::get_halt_status(state, current_time);
 
         HaltStatusResult {
@@ -1955,10 +1923,7 @@ pub mod query {
     }
 
     /// Gets remaining cooldown time in seconds
-    pub fn get_remaining_cooldown(
-        env: &Env,
-        state: &EnhancedCircuitBreakerState,
-    ) -> u64 {
+    pub fn get_remaining_cooldown(env: &Env, state: &EnhancedCircuitBreakerState) -> u64 {
         let current_time = env.ledger().timestamp();
         state.remaining_cooldown(current_time)
     }
@@ -1976,9 +1941,7 @@ pub mod query {
     }
 
     /// Gets anomaly scores if anomaly detection is enabled
-    pub fn get_anomaly_scores(
-        state: &EnhancedCircuitBreakerState,
-    ) -> Option<(u32, u32, u32, u32)> {
+    pub fn get_anomaly_scores(state: &EnhancedCircuitBreakerState) -> Option<(u32, u32, u32, u32)> {
         state.anomaly_state.as_ref().map(|anomaly| {
             (
                 anomaly.sender_clustering_score,
@@ -2000,19 +1963,15 @@ pub mod query {
     }
 }
 
-
 /// Estimation and planning functions for integration
 pub mod estimation {
     use super::*;
     use soroban_sdk::Env;
 
     /// Estimates recovery time based on current state
-    pub fn estimate_recovery_time(
-        env: &Env,
-        state: &EnhancedCircuitBreakerState,
-    ) -> u64 {
+    pub fn estimate_recovery_time(env: &Env, state: &EnhancedCircuitBreakerState) -> u64 {
         let current_time = env.ledger().timestamp();
-        
+
         if !state.is_halted(current_time) {
             return 0;
         }
@@ -2021,9 +1980,7 @@ pub mod estimation {
     }
 
     /// Estimates gas cost for circuit breaker check operation
-    pub fn estimate_check_gas_cost(
-        config: &EnhancedCircuitBreakerConfig,
-    ) -> u64 {
+    pub fn estimate_check_gas_cost(config: &EnhancedCircuitBreakerConfig) -> u64 {
         let mut base_cost = 1000u64; // Base cost for simple checks
 
         // Add cost for volume tracking
@@ -2046,12 +2003,10 @@ pub mod estimation {
     }
 
     /// Provides performance metrics and recommendations
-    pub fn get_performance_metrics(
-        state: &EnhancedCircuitBreakerState,
-    ) -> (u32, u64, f64) {
+    pub fn get_performance_metrics(state: &EnhancedCircuitBreakerState) -> (u32, u64, f64) {
         let total_halts = state.total_halts;
         let total_duration = state.total_halt_duration;
-        
+
         // Calculate average halt duration
         let avg_duration = if total_halts > 0 {
             total_duration as f64 / total_halts as f64
@@ -2104,7 +2059,6 @@ pub mod estimation {
     }
 }
 
-
 /// Batch query capabilities for efficient multi-entity queries
 pub mod batch_query {
     use super::*;
@@ -2152,7 +2106,7 @@ pub mod batch_query {
         for creator in creators.iter() {
             let override_limit = super::admin::get_creator_limit(env, &creator);
             let has_override = override_limit.is_some();
-            
+
             let status_code = get_system_status_code(config);
 
             results.set(
@@ -2180,7 +2134,7 @@ pub mod batch_query {
         for token in tokens.iter() {
             let token_limit = super::admin::get_token_limit(env, &token);
             let has_limit = token_limit.is_some();
-            
+
             let status_code = get_system_status_code(config);
 
             results.set(
@@ -2238,11 +2192,10 @@ pub mod batch_query {
     }
 }
 
-
 /// Comprehensive event emission system
 pub mod events {
     use super::*;
-    use soroban_sdk::{Address, Env, Symbol, symbol_short};
+    use soroban_sdk::{symbol_short, Address, Env, Symbol};
 
     /// Recovery type enumeration
     #[contracttype]
@@ -2265,7 +2218,12 @@ pub mod events {
     ) {
         env.events().publish(
             (symbol_short!("cb_trig"), trigger_id),
-            (trigger_type.clone(), severity, cooldown_duration, volume_stats.cloned()),
+            (
+                trigger_type.clone(),
+                severity,
+                cooldown_duration,
+                volume_stats.cloned(),
+            ),
         );
     }
 
@@ -2289,10 +2247,8 @@ pub mod events {
         admin: &Address,
         config: &EnhancedCircuitBreakerConfig,
     ) {
-        env.events().publish(
-            (symbol_short!("cb_cfg"), admin.clone()),
-            config.clone(),
-        );
+        env.events()
+            .publish((symbol_short!("cb_cfg"), admin.clone()), config.clone());
     }
 
     /// Emits periodic status event during extended halts
@@ -2303,17 +2259,16 @@ pub mod events {
     ) {
         env.events().publish(
             (symbol_short!("cb_stat"), env.ledger().timestamp()),
-            (state.halt_reason.clone(), state.halt_severity, remaining_cooldown),
+            (
+                state.halt_reason.clone(),
+                state.halt_severity,
+                remaining_cooldown,
+            ),
         );
     }
 
     /// Emits audit trail event for state changes
-    pub fn emit_audit_event(
-        env: &Env,
-        action: Symbol,
-        admin: Option<&Address>,
-        details: Symbol,
-    ) {
+    pub fn emit_audit_event(env: &Env, action: Symbol, admin: Option<&Address>, details: Symbol) {
         env.events().publish(
             (symbol_short!("cb_audit"), action),
             (admin.cloned(), details, env.ledger().timestamp()),
@@ -2344,11 +2299,15 @@ pub mod events {
     ) {
         env.events().publish(
             (symbol_short!("cb_anom"), env.ledger().timestamp()),
-            (confidence_score, clustering_score, velocity_score, amount_score),
+            (
+                confidence_score,
+                clustering_score,
+                velocity_score,
+                amount_score,
+            ),
         );
     }
 }
-
 
 /// Audit trail and history tracking
 pub mod audit {
@@ -2385,10 +2344,9 @@ pub mod audit {
         };
 
         // Store audit entry (using temporary storage for recent entries)
-        env.storage().temporary().set(
-            &(symbol_short!("audit"), entry_id),
-            &entry
-        );
+        env.storage()
+            .temporary()
+            .set(&(symbol_short!("audit"), entry_id), &entry);
 
         // Emit audit event
         super::events::emit_audit_event(env, action, admin, details);
@@ -2398,14 +2356,17 @@ pub mod audit {
 
     /// Gets next audit entry ID
     fn get_next_audit_id(env: &Env) -> u64 {
-        let current: u64 = env.storage()
+        let current: u64 = env
+            .storage()
             .instance()
             .get(&symbol_short!("aud_ctr"))
             .unwrap_or(0);
-        
+
         let next = current.saturating_add(1);
-        env.storage().instance().set(&symbol_short!("aud_ctr"), &next);
-        
+        env.storage()
+            .instance()
+            .set(&symbol_short!("aud_ctr"), &next);
+
         next
     }
 
@@ -2413,7 +2374,7 @@ pub mod audit {
     pub fn get_recent_audit_entries(env: &Env, limit: u32) -> Vec<AuditEntry> {
         let mut entries = Vec::new(env);
         let current_id = get_current_audit_id(env);
-        
+
         let start_id = if current_id > limit as u64 {
             current_id - limit as u64
         } else {
@@ -2421,9 +2382,11 @@ pub mod audit {
         };
 
         for id in start_id..=current_id {
-            if let Some(entry) = env.storage().temporary().get::<_, AuditEntry>(
-                &(symbol_short!("audit"), id)
-            ) {
+            if let Some(entry) = env
+                .storage()
+                .temporary()
+                .get::<_, AuditEntry>(&(symbol_short!("audit"), id))
+            {
                 entries.push_back(entry);
             }
         }
@@ -2447,7 +2410,6 @@ pub mod audit {
     }
 }
 
-
 /// Periodic status event emission for extended halts
 pub mod periodic_status {
     use super::*;
@@ -2464,7 +2426,7 @@ pub mod periodic_status {
         interval: u64,
     ) -> bool {
         let current_time = env.ledger().timestamp();
-        
+
         // Only emit if halted
         if !state.is_halted(current_time) {
             return false;
@@ -2475,10 +2437,7 @@ pub mod periodic_status {
     }
 
     /// Emits periodic status event and returns new last status time
-    pub fn emit_periodic_status(
-        env: &Env,
-        state: &EnhancedCircuitBreakerState,
-    ) -> u64 {
+    pub fn emit_periodic_status(env: &Env, state: &EnhancedCircuitBreakerState) -> u64 {
         let current_time = env.ledger().timestamp();
         let remaining = state.remaining_cooldown(current_time);
 
@@ -2517,7 +2476,6 @@ pub mod periodic_status {
         }
     }
 }
-
 
 /// Performance optimization and caching layer
 pub mod cache {
@@ -2568,10 +2526,7 @@ pub mod cache {
 
     /// Checks if cache is valid
     fn is_cache_valid(env: &Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&CACHE_VALID)
-            .unwrap_or(false)
+        env.storage().instance().get(&CACHE_VALID).unwrap_or(false)
     }
 
     /// Marks cache as valid
@@ -2585,21 +2540,16 @@ pub mod cache {
     }
 
     /// Efficient data structure for volume tracking with minimal storage ops
-    pub fn batch_update_volumes(
-        env: &Env,
-        state: &mut EnhancedCircuitBreakerState,
-        amount: i128,
-    ) {
+    pub fn batch_update_volumes(env: &Env, state: &mut EnhancedCircuitBreakerState, amount: i128) {
         let current_time = env.ledger().timestamp();
-        
+
         // Update all windows in a single operation
         super::volume_tracker::update_all_windows(state, amount, current_time);
-        
+
         // Single storage write for all updates
         update_state_cache(env, state);
     }
 }
-
 
 /// State update batching and optimization
 pub mod optimization {
@@ -2653,7 +2603,7 @@ pub mod optimization {
 
         // Only perform expensive calculations if we're close to thresholds
         let current_time = env.ledger().timestamp();
-        
+
         // Update anomaly state
         super::anomaly_detector::update_anomaly_state(
             &mut state.anomaly_state,
@@ -2690,30 +2640,23 @@ pub mod optimization {
         }
 
         // Check 1: Single tip spike (fastest check)
-        if let Some(severity) = super::trigger_engine::check_single_tip_spike(
-            config,
-            amount,
-            creator,
-            token,
-        ) {
+        if let Some(severity) =
+            super::trigger_engine::check_single_tip_spike(config, amount, creator, token)
+        {
             return Some((TriggerType::SingleTipSpike, severity));
         }
 
         // Check 2: Rate limiting (fast check)
-        if let Some(trigger) = super::rate_limiter::check_rate_limit_trigger(
-            state,
-            config,
-            current_time,
-        ) {
+        if let Some(trigger) =
+            super::rate_limiter::check_rate_limit_trigger(state, config, current_time)
+        {
             return Some(trigger);
         }
 
         // Check 3: Volume thresholds (medium cost)
-        if let Some(trigger) = super::volume_tracker::check_all_volume_thresholds(
-            state,
-            config,
-            current_time,
-        ) {
+        if let Some(trigger) =
+            super::volume_tracker::check_all_volume_thresholds(state, config, current_time)
+        {
             return Some(trigger);
         }
 
@@ -2726,11 +2669,7 @@ pub mod optimization {
     }
 
     /// Minimizes storage operations by batching related updates
-    pub fn batch_state_updates(
-        env: &Env,
-        state: &mut EnhancedCircuitBreakerState,
-        amount: i128,
-    ) {
+    pub fn batch_state_updates(env: &Env, state: &mut EnhancedCircuitBreakerState, amount: i128) {
         let current_time = env.ledger().timestamp();
 
         // Batch all volume window updates
@@ -2743,7 +2682,6 @@ pub mod optimization {
         super::cache::update_state_cache(env, state);
     }
 }
-
 
 /// Gas optimization and monitoring
 pub mod gas_optimization {
@@ -2800,11 +2738,7 @@ pub mod gas_optimization {
     }
 
     /// Validates gas estimation accuracy
-    pub fn validate_gas_estimates(
-        estimated: u64,
-        actual: u64,
-        tolerance_percent: u32,
-    ) -> bool {
+    pub fn validate_gas_estimates(estimated: u64, actual: u64, tolerance_percent: u32) -> bool {
         let tolerance = (estimated * tolerance_percent as u64) / 100;
         let diff = if actual > estimated {
             actual - estimated
@@ -2825,11 +2759,10 @@ pub mod gas_optimization {
         let alpha_scaled = alpha as u64;
         let weighted_actual = actual_cost.saturating_mul(alpha_scaled) / 10000;
         let weighted_current = current_estimate.saturating_mul(10000 - alpha_scaled) / 10000;
-        
+
         weighted_actual.saturating_add(weighted_current)
     }
 }
-
 
 /// Main circuit breaker guard interface - primary entry point
 pub mod guard {
@@ -2837,7 +2770,7 @@ pub mod guard {
     use soroban_sdk::{Address, Env};
 
     /// Main circuit breaker check function
-    /// 
+    ///
     /// This is the primary entry point that should be called before tip operations
     pub fn check_circuit_breaker(
         env: &Env,
@@ -2867,7 +2800,7 @@ pub mod guard {
         let current_time = env.ledger().timestamp();
         if halt_manager::check_automatic_recovery(&state, current_time) {
             halt_manager::perform_automatic_recovery(&mut state, current_time);
-            
+
             // Emit recovery event
             let recovery_id = audit::get_current_audit_id(env);
             events::emit_recovery_event(
@@ -2882,25 +2815,26 @@ pub mod guard {
         // Check if operations should be blocked
         if halt_manager::should_block_operations(&state, &config, current_time) {
             let error_code = error_handler::get_halt_error_code(&state, &config);
-            
+
             // Emit periodic status if needed
             periodic_status::check_and_emit_status(env, &state, None);
-            
+
             return Err(CircuitBreakerError::InvalidConfiguration); // Map to appropriate error
         }
 
         // Perform optimized check sequence
-        if let Some((trigger_type, severity)) = optimization::optimized_check_sequence(
-            env,
-            &mut state,
-            &config,
-            amount,
-            creator,
-            token,
-        ) {
+        if let Some((trigger_type, severity)) =
+            optimization::optimized_check_sequence(env, &mut state, &config, amount, creator, token)
+        {
             // Trigger detected - activate halt
-            halt_manager::activate_halt(&mut state, &config, trigger_type.clone(), severity, current_time);
-            
+            halt_manager::activate_halt(
+                &mut state,
+                &config,
+                trigger_type.clone(),
+                severity,
+                current_time,
+            );
+
             // Emit trigger event
             let trigger_id = state.trigger_count as u64;
             let volume_stats = query::get_volume_stats(&state);
@@ -2912,7 +2846,7 @@ pub mod guard {
                 state.halted_until - current_time,
                 Some(&volume_stats),
             );
-            
+
             // Record audit entry
             audit::record_audit_entry(
                 env,
@@ -2920,10 +2854,10 @@ pub mod guard {
                 None,
                 soroban_sdk::symbol_short!("auto"),
             );
-            
+
             // Update state cache
             cache::update_state_cache(env, &state);
-            
+
             return Err(CircuitBreakerError::InvalidConfiguration); // Map to appropriate error
         }
 
@@ -2956,4 +2890,3 @@ pub mod guard {
         query::get_halt_status(env, &state)
     }
 }
-

@@ -34,13 +34,24 @@ pub struct WithdrawalEventData {
 /// { "topic": ["tip", "<creator>", "<token>"], "value": ["<sender>", "<amount>"] }
 /// ```
 pub fn parse_tip_event(raw: &Value) -> Result<TipEventData> {
-    let topic = raw.get("topic").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("missing topic array"))?;
+    let topic = raw
+        .get("topic")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("missing topic array"))?;
     let creator = str_at(topic, 1, "creator")?;
-    let token   = str_at(topic, 2, "token")?;
-    let value   = raw.get("value").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("tip value is not an array"))?;
-    let sender  = str_at(value, 0, "sender")?;
-    let amount  = str_at(value, 1, "amount")?;
-    Ok(TipEventData { creator, token, sender, amount })
+    let token = str_at(topic, 2, "token")?;
+    let value = raw
+        .get("value")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("tip value is not an array"))?;
+    let sender = str_at(value, 0, "sender")?;
+    let amount = str_at(value, 1, "amount")?;
+    Ok(TipEventData {
+        creator,
+        token,
+        sender,
+        amount,
+    })
 }
 
 /// Parses a raw Horizon/RPC event value into [`WithdrawalEventData`].
@@ -50,11 +61,18 @@ pub fn parse_tip_event(raw: &Value) -> Result<TipEventData> {
 /// { "topic": ["withdraw", "<creator>", "<token>"], "value": "<amount>" }
 /// ```
 pub fn parse_withdrawal_event(raw: &Value) -> Result<WithdrawalEventData> {
-    let topic   = raw.get("topic").and_then(|v| v.as_array()).ok_or_else(|| anyhow!("missing topic array"))?;
+    let topic = raw
+        .get("topic")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("missing topic array"))?;
     let creator = str_at(topic, 1, "creator")?;
-    let token   = str_at(topic, 2, "token")?;
-    let amount  = val_to_string(raw.get("value").unwrap_or(&Value::Null));
-    Ok(WithdrawalEventData { creator, token, amount })
+    let token = str_at(topic, 2, "token")?;
+    let amount = val_to_string(raw.get("value").unwrap_or(&Value::Null));
+    Ok(WithdrawalEventData {
+        creator,
+        token,
+        amount,
+    })
 }
 
 /// POSTs `payload` to `url` with up to 3 attempts (backoff: 1 s, 2 s, 4 s).

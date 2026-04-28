@@ -1,6 +1,6 @@
 //! Timelock mechanism for governance
 
-use super::{ProposalAction, DataKey};
+use super::{DataKey, ProposalAction};
 use soroban_sdk::{Address, Env, String, Vec};
 
 /// Execute a proposal after timelock
@@ -41,31 +41,23 @@ fn execute_action(env: &Env, action: &ProposalAction) {
         ProposalAction::UpdateFee(new_fee_bps) => {
             // In production, this would update the AMM fee
             // For now, we'll just log the action
-            env.events().publish(
-                (soroban_sdk::symbol_short!("fee_upd"),),
-                *new_fee_bps,
-            );
+            env.events()
+                .publish((soroban_sdk::symbol_short!("fee_upd"),), *new_fee_bps);
         }
         ProposalAction::AddToken(token) => {
             // In production, this would add token to whitelist
-            env.events().publish(
-                (soroban_sdk::symbol_short!("token_add"),),
-                token.clone(),
-            );
+            env.events()
+                .publish((soroban_sdk::symbol_short!("token_add"),), token.clone());
         }
         ProposalAction::RemoveToken(token) => {
             // In production, this would remove token from whitelist
-            env.events().publish(
-                (soroban_sdk::symbol_short!("token_rm"),),
-                token.clone(),
-            );
+            env.events()
+                .publish((soroban_sdk::symbol_short!("token_rm"),), token.clone());
         }
         ProposalAction::UpdatePauseStatus(paused) => {
             // In production, this would update pause status
-            env.events().publish(
-                (soroban_sdk::symbol_short!("pause_upd"),),
-                *paused,
-            );
+            env.events()
+                .publish((soroban_sdk::symbol_short!("pause_upd"),), *paused);
         }
         ProposalAction::UpdateTimelock(new_timelock) => {
             // Update timelock in governance config
@@ -99,10 +91,8 @@ fn execute_action(env: &Env, action: &ProposalAction) {
         }
         ProposalAction::Custom(data) => {
             // Custom action - just log it
-            env.events().publish(
-                (soroban_sdk::symbol_short!("custom"),),
-                data.clone(),
-            );
+            env.events()
+                .publish((soroban_sdk::symbol_short!("custom"),), data.clone());
         }
     }
 }

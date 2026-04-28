@@ -2,10 +2,19 @@
 
 extern crate std;
 
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String};
-use tipjar::{DataKey, VestingSchedule, TipJarContract, TipJarContractClient, TipJarError};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
+use tipjar::{DataKey, TipJarContract, TipJarContractClient, TipJarError, VestingSchedule};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -35,8 +44,8 @@ fn test_create_vesting_schedule() {
         &creator,
         &token,
         &1000i128,
-        &86400u64,  // 1 day cliff
-        &2592000u64 // 30 days total vesting
+        &86400u64,   // 1 day cliff
+        &2592000u64, // 30 days total vesting
     );
 
     assert_eq!(schedule_id, 0);
@@ -62,7 +71,7 @@ fn test_vested_amount_before_cliff() {
         &token,
         &1000i128,
         &86400u64,
-        &2592000u64
+        &2592000u64,
     );
 
     // Before cliff: 0 vested
@@ -79,8 +88,8 @@ fn test_vested_amount_after_cliff() {
         &creator,
         &token,
         &1000i128,
-        &86400u64,  // 1 day cliff
-        &2592000u64 // 30 days total
+        &86400u64,   // 1 day cliff
+        &2592000u64, // 30 days total
     );
 
     // Advance time past cliff (1 day + 1 second)
@@ -103,7 +112,7 @@ fn test_vested_amount_at_full_vesting() {
         &token,
         &1000i128,
         &86400u64,
-        &2592000u64
+        &2592000u64,
     );
 
     // Advance time past total vesting duration
@@ -118,12 +127,8 @@ fn test_linear_vesting_progression() {
     let (env, client, tipper, creator, token) = setup();
 
     let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &3000i128,
-        &0u64,        // No cliff
-        &3000u64      // 3000 seconds total
+        &tipper, &creator, &token, &3000i128, &0u64,    // No cliff
+        &3000u64, // 3000 seconds total
     );
 
     // At 50% of vesting period (1500 seconds)
@@ -142,12 +147,8 @@ fn test_withdraw_vested_after_cliff() {
     let (env, client, tipper, creator, token) = setup();
 
     let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &3000i128,
-        &1000u64,   // 1000 second cliff
-        &3000u64    // 3000 second total vesting
+        &tipper, &creator, &token, &3000i128, &1000u64, // 1000 second cliff
+        &3000u64, // 3000 second total vesting
     );
 
     // Advance past cliff
@@ -165,12 +166,8 @@ fn test_withdraw_vested_partial_then_full() {
     let (env, client, tipper, creator, token) = setup();
 
     let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &0u64,      // No cliff
-        &2000u64    // 2000 seconds total
+        &tipper, &creator, &token, &1000i128, &0u64,    // No cliff
+        &2000u64, // 2000 seconds total
     );
 
     // First withdrawal at 25% vesting (500 seconds in)
@@ -198,7 +195,7 @@ fn test_no_vested_before_cliff() {
         &token,
         &1000i128,
         &86400u64,
-        &2592000u64
+        &2592000u64,
     );
 
     // Try to withdraw before cliff
@@ -211,12 +208,8 @@ fn test_cliff_duration_cannot_exceed_vesting() {
     let (env, client, tipper, creator, token) = setup();
 
     let result = client.try_create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &3000u64,   // Cliff 3000 seconds
-        &2000u64    // But vesting only 2000 seconds
+        &tipper, &creator, &token, &1000i128, &3000u64, // Cliff 3000 seconds
+        &2000u64, // But vesting only 2000 seconds
     );
 
     assert_eq!(result, Err(Ok(TipJarError::CliffExceedsVesting)));
@@ -230,9 +223,9 @@ fn test_invalid_amount() {
         &tipper,
         &creator,
         &token,
-        &0i128,     // Invalid amount
+        &0i128, // Invalid amount
         &86400u64,
-        &2592000u64
+        &2592000u64,
     );
 
     assert_eq!(result, Err(Ok(TipJarError::InvalidAmount)));
@@ -243,12 +236,7 @@ fn test_invalid_vesting_duration() {
     let (env, client, tipper, creator, token) = setup();
 
     let result = client.try_create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &0u64,
-        &0u64       // Invalid duration
+        &tipper, &creator, &token, &1000i128, &0u64, &0u64, // Invalid duration
     );
 
     assert_eq!(result, Err(Ok(TipJarError::InvalidVestingDuration)));
@@ -259,23 +247,9 @@ fn test_get_creator_vesting_schedules() {
     let (env, client, tipper, creator, token) = setup();
 
     // Create multiple schedules
-    let id1 = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &0u64,
-        &1000u64
-    );
+    let id1 = client.create_vesting_schedule(&tipper, &creator, &token, &1000i128, &0u64, &1000u64);
 
-    let id2 = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &2000i128,
-        &0u64,
-        &2000u64
-    );
+    let id2 = client.create_vesting_schedule(&tipper, &creator, &token, &2000i128, &0u64, &2000u64);
 
     let schedules = client.get_creator_vesting_schedules(&creator);
     assert_eq!(schedules.len(), 2);
@@ -288,14 +262,8 @@ fn test_unauthorized_withdrawal() {
     let (env, client, tipper, creator, token) = setup();
     let other_creator = Address::generate(&env);
 
-    let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &0u64,
-        &1000u64
-    );
+    let schedule_id =
+        client.create_vesting_schedule(&tipper, &creator, &token, &1000i128, &0u64, &1000u64);
 
     env.ledger().with_mut(|ledger| ledger.timestamp += 500);
 
@@ -324,14 +292,8 @@ fn test_nonexistent_schedule() {
 fn test_available_vested_amount() {
     let (env, client, tipper, creator, token) = setup();
 
-    let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &1000i128,
-        &0u64,
-        &2000u64
-    );
+    let schedule_id =
+        client.create_vesting_schedule(&tipper, &creator, &token, &1000i128, &0u64, &2000u64);
 
     // At 50% vesting
     env.ledger().with_mut(|ledger| ledger.timestamp += 1000);
@@ -353,12 +315,8 @@ fn test_no_cliff_vesting() {
     let (env, client, tipper, creator, token) = setup();
 
     let schedule_id = client.create_vesting_schedule(
-        &tipper,
-        &creator,
-        &token,
-        &2000i128,
-        &0u64,      // No cliff
-        &2000u64
+        &tipper, &creator, &token, &2000i128, &0u64, // No cliff
+        &2000u64,
     );
 
     // At 1% of duration, should have vested

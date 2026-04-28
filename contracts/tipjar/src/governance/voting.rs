@@ -1,6 +1,6 @@
 //! Voting mechanism for governance
 
-use super::{Vote, VoteChoice, DataKey};
+use super::{DataKey, Vote, VoteChoice};
 use soroban_sdk::{Address, Env, Vec};
 
 /// Cast a vote on a proposal
@@ -42,7 +42,11 @@ pub fn cast_vote(
 
     // Update voter's total votes
     let voter_votes_key = DataKey::VoterVotes(voter.clone());
-    let current_votes: i128 = env.storage().persistent().get(&voter_votes_key).unwrap_or(0);
+    let current_votes: i128 = env
+        .storage()
+        .persistent()
+        .get(&voter_votes_key)
+        .unwrap_or(0);
     env.storage()
         .persistent()
         .set(&voter_votes_key, &(current_votes + voting_power));
@@ -71,7 +75,10 @@ pub fn get_vote(env: &Env, proposal_id: u64, voter: &Address) -> Option<Vote> {
 /// Get total votes cast by a voter
 pub fn get_voter_total_votes(env: &Env, voter: &Address) -> i128 {
     let voter_votes_key = DataKey::VoterVotes(voter.clone());
-    env.storage().persistent().get(&voter_votes_key).unwrap_or(0)
+    env.storage()
+        .persistent()
+        .get(&voter_votes_key)
+        .unwrap_or(0)
 }
 
 /// Get all votes for a proposal
@@ -105,4 +112,3 @@ pub fn get_vote_breakdown(env: &Env, proposal_id: u64) -> (i128, i128, i128) {
     let total_votes = proposal.votes_for + proposal.votes_against;
     (proposal.votes_for, proposal.votes_against, total_votes)
 }
-

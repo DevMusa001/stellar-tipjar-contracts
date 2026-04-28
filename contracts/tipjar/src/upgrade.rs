@@ -1,6 +1,9 @@
 use soroban_sdk::{symbol_short, BytesN, Env};
 
-use crate::{storage, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError};
+use crate::{
+    storage, AuctionError, CoreError, CreditError, FeatureError, OtherError, StreamError,
+    SystemError, TipJarError, VestingError,
+};
 
 /// Performs an admin-authorized WASM upgrade and bumps the on-chain version.
 ///
@@ -60,6 +63,3 @@ pub fn upgrade(env: &Env, new_wasm_hash: BytesN<32>) {
 pub fn get_version(env: &Env) -> u32 {
     storage::get_contract_version(env)
 }
-
-
-

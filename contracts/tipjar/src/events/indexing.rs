@@ -13,7 +13,9 @@ pub fn update_event_index(env: &Env, event: &TipEvent) {
         .get(&creator_key)
         .unwrap_or_else(|| Vec::new(env));
     creator_events.push_back(event.event_id);
-    env.storage().persistent().set(&creator_key, &creator_events);
+    env.storage()
+        .persistent()
+        .set(&creator_key, &creator_events);
 
     // Update sender index
     let sender_key = DataKey::SenderEvents(event.sender.clone());

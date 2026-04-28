@@ -1,10 +1,10 @@
+pub mod batch;
 /// Polynomial commitment scheme for tip data verification.
 ///
 /// Uses a hash-based univariate polynomial commitment over F_p where
 /// p = 2^61 - 1 (Mersenne prime). Commitment = SHA256(coefficients).
 /// Opening proof = polynomial evaluation at a challenge point.
 pub mod commitment;
-pub mod batch;
 
 use soroban_sdk::{contracttype, BytesN, Vec};
 
@@ -58,20 +58,32 @@ pub fn fp_reduce(x: u128) -> u64 {
     let lo = (x & (FIELD_PRIME as u128)) as u64;
     let hi = (x >> 61) as u64;
     let sum = lo + hi;
-    if sum >= FIELD_PRIME { sum - FIELD_PRIME } else { sum }
+    if sum >= FIELD_PRIME {
+        sum - FIELD_PRIME
+    } else {
+        sum
+    }
 }
 
 /// Addition in F_p.
 #[inline]
 pub fn fp_add(a: u64, b: u64) -> u64 {
     let s = a + b;
-    if s >= FIELD_PRIME { s - FIELD_PRIME } else { s }
+    if s >= FIELD_PRIME {
+        s - FIELD_PRIME
+    } else {
+        s
+    }
 }
 
 /// Subtraction in F_p.
 #[inline]
 pub fn fp_sub(a: u64, b: u64) -> u64 {
-    if a >= b { a - b } else { a + FIELD_PRIME - b }
+    if a >= b {
+        a - b
+    } else {
+        a + FIELD_PRIME - b
+    }
 }
 
 /// Multiplication in F_p.

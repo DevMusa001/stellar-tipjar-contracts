@@ -6,8 +6,10 @@
 
 use soroban_sdk::{token, Env};
 
-use super::{get_contract, get_position, remove_active_contract, save_contract, save_position,
-            FuturesStatus, Side, PRICE_PRECISION};
+use super::{
+    get_contract, get_position, remove_active_contract, save_contract, save_position,
+    FuturesStatus, Side, PRICE_PRECISION,
+};
 
 /// Settle a futures contract at the given final price.
 ///
@@ -50,7 +52,11 @@ pub fn settle(env: &Env, contract_id: u64, final_price: i128) -> (i128, i128) {
     let token_client = token::Client::new(env, &fc.token);
 
     if long_payout > 0 {
-        token_client.transfer(&env.current_contract_address(), &fc.long_party, &long_payout);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &fc.long_party,
+            &long_payout,
+        );
     }
     if short_payout > 0 {
         token_client.transfer(&env.current_contract_address(), &short_party, &short_payout);

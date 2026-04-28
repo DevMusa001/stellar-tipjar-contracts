@@ -3,13 +3,19 @@
 //! Provides read-only access to synthetic asset information for users
 //! to make informed decisions about minting and redemption.
 
-use soroban_sdk::{Address, Env, Vec};
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
-use super::types::SyntheticAsset;
-use super::oracle::get_oracle_price;
-use super::supply::{get_total_supply, get_total_collateral, get_collateralization_ratio};
 use super::minting::calculate_required_collateral;
+use super::oracle::get_oracle_price;
 use super::redemption::calculate_redemption_value;
+use super::supply::{get_collateralization_ratio, get_total_collateral, get_total_supply};
+use super::types::SyntheticAsset;
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
+use soroban_sdk::{Address, Env, Vec};
 
 /// Retrieves synthetic asset details by asset identifier
 ///
@@ -45,7 +51,8 @@ pub fn get_synthetic_asset(env: &Env, asset_id: u64) -> Result<SyntheticAsset, T
 /// # Requirements
 /// - Validates: Requirements 9.2
 pub fn get_creator_synthetic_assets(env: &Env, creator: &Address) -> Vec<u64> {
-    let creator_assets_key = DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
+    let creator_assets_key =
+        DataKey::Synthetic(SyntheticKey::CreatorSyntheticAssets(creator.clone()));
     env.storage()
         .persistent()
         .get(&creator_assets_key)
@@ -66,10 +73,7 @@ pub fn get_creator_synthetic_assets(env: &Env, creator: &Address) -> Vec<u64> {
 /// - Validates: Requirements 9.8
 pub fn get_holder_balance(env: &Env, asset_id: u64, holder: &Address) -> i128 {
     let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(holder.clone(), asset_id));
-    env.storage()
-        .persistent()
-        .get(&balance_key)
-        .unwrap_or(0)
+    env.storage().persistent().get(&balance_key).unwrap_or(0)
 }
 
 /// Retrieves the current oracle price for a synthetic asset

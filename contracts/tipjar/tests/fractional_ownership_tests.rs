@@ -28,7 +28,9 @@ fn test_mint_fractions_creates_pool() {
 
     client.mint_fractions(&creator, &1_000u64, &10i128);
 
-    let pool = client.get_fraction_pool(&creator).expect("pool should exist");
+    let pool = client
+        .get_fraction_pool(&creator)
+        .expect("pool should exist");
     assert_eq!(pool.total_supply, 1_000);
     assert_eq!(pool.buyout_price_per_fraction, 10);
     assert_eq!(pool.pending_revenue, 0);

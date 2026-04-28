@@ -15,12 +15,20 @@ const ONE_MONTH: u64 = 2_592_000;
 
 // ── setup ─────────────────────────────────────────────────────────────────────
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
     let token_admin = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_admin.clone()).address();
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
 
     let admin = Address::generate(&env);
     let contract_id = env.register(TipJarContract, ());
@@ -105,7 +113,9 @@ fn test_get_tier_benefits_returns_description() {
 #[test]
 fn test_get_tier_benefits_returns_none_when_not_configured() {
     let (_env, client, _admin, _token, _ta) = setup();
-    assert!(client.get_tier_benefits(&SubscriptionTier::Silver).is_none());
+    assert!(client
+        .get_tier_benefits(&SubscriptionTier::Silver)
+        .is_none());
 }
 
 // ── create_tiered_subscription ────────────────────────────────────────────────
@@ -216,8 +226,7 @@ fn test_upgrade_fails_when_tier_not_configured() {
         &ONE_MONTH,
     );
 
-    let result =
-        client.try_upgrade_subscription(&subscriber, &creator, &SubscriptionTier::Gold);
+    let result = client.try_upgrade_subscription(&subscriber, &creator, &SubscriptionTier::Gold);
     assert!(result.is_err());
 }
 

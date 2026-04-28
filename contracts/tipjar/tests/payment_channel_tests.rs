@@ -11,7 +11,14 @@ use tipjar::{
     ChannelError, DataKey, TipJarContract, TipJarContractClient, TipJarError,
 };
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -124,7 +131,7 @@ fn test_dispute_close_initiate_and_finalise() {
 
     let tok = soroban_sdk::token::Client::new(&env, &token);
     assert_eq!(tok.balance(&party_a), 1300); // 1000 - 500 + 800
-    assert_eq!(tok.balance(&party_b), 700);  // 1000 - 500 + 200
+    assert_eq!(tok.balance(&party_b), 700); // 1000 - 500 + 200
 }
 
 #[test]

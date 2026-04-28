@@ -18,6 +18,10 @@ pub fn compute_commitment(
 
 /// Returns true if the opening's preimage matches the stored commitment.
 pub fn verify_opening(env: &Env, commitment: &BytesN<32>, opening: &CommitmentOpening) -> bool {
-    compute_commitment(env, &opening.creator, opening.amount, &opening.blinding_factor)
-        == *commitment
+    compute_commitment(
+        env,
+        &opening.creator,
+        opening.amount,
+        &opening.blinding_factor,
+    ) == *commitment
 }

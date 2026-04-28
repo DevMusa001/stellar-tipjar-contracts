@@ -84,10 +84,7 @@ fn append_history(env: &Env, split_id: &Address, entry: &SplitHistoryEntry) {
 
 fn validate_recipients(recipients: &Vec<SplitRecipient>) {
     assert!(!recipients.is_empty(), "no recipients");
-    assert!(
-        recipients.len() <= MAX_RECIPIENTS,
-        "too many recipients"
-    );
+    assert!(recipients.len() <= MAX_RECIPIENTS, "too many recipients");
     let total: u32 = (0..recipients.len())
         .map(|i| recipients.get(i).unwrap().share_bps)
         .sum();
@@ -102,16 +99,35 @@ fn validate_recipients(recipients: &Vec<SplitRecipient>) {
 pub fn set_split(env: &Env, split_id: &Address, owner: &Address, recipients: Vec<SplitRecipient>) {
     owner.require_auth();
     validate_recipients(&recipients);
-    save_config(env, split_id, &SplitConfig { owner: owner.clone(), recipients });
+    save_config(
+        env,
+        split_id,
+        &SplitConfig {
+            owner: owner.clone(),
+            recipients,
+        },
+    );
 }
 
 /// Modify an existing split configuration. Only the original owner may do this.
-pub fn modify_split(env: &Env, split_id: &Address, owner: &Address, recipients: Vec<SplitRecipient>) {
+pub fn modify_split(
+    env: &Env,
+    split_id: &Address,
+    owner: &Address,
+    recipients: Vec<SplitRecipient>,
+) {
     owner.require_auth();
     let cfg = load_config(env, split_id).expect("split not found");
     assert!(cfg.owner == *owner, "not split owner");
     validate_recipients(&recipients);
-    save_config(env, split_id, &SplitConfig { owner: owner.clone(), recipients });
+    save_config(
+        env,
+        split_id,
+        &SplitConfig {
+            owner: owner.clone(),
+            recipients,
+        },
+    );
 }
 
 /// Distribute `amount` according to the split config for `split_id`.
@@ -168,10 +184,8 @@ fn distribute_inner(env: &Env, split_id: &Address, amount: i128, depth: u32) -> 
                 timestamp: env.ledger().timestamp(),
             },
         );
-        env.events().publish(
-            (symbol_short!("split_dst"), split_id.clone()),
-            distributed,
-        );
+        env.events()
+            .publish((symbol_short!("split_dst"), split_id.clone()), distributed);
     }
 
     distributed
@@ -226,35 +240,78 @@ pub const MAX_DEPTH: u32 = 5;
 pub const MAX_ROYALTY_BPS: u32 = 3_000;
 
 /// Register a royalty configuration for a creator's content (legacy).
-pub fn register_royalty(env: &Env, creator: &Address, original_creator: &Address, rate_bps: u32, max_depth: u32) {
-    let depth = if max_depth == 0 { MAX_DEPTH } else { max_depth.min(MAX_DEPTH) };
-    let config = RoyaltyConfig { original_creator: original_creator.clone(), rate_bps, max_depth: depth };
-    env.storage().persistent().set(&DataKey::RoyaltyConfig(creator.clone()), &config);
+pub fn register_royalty(
+    env: &Env,
+    creator: &Address,
+    original_creator: &Address,
+    rate_bps: u32,
+    max_depth: u32,
+) {
+    let depth = if max_depth == 0 {
+        MAX_DEPTH
+    } else {
+        max_depth.min(MAX_DEPTH)
+    };
+    let config = RoyaltyConfig {
+        original_creator: original_creator.clone(),
+        rate_bps,
+        max_depth: depth,
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::RoyaltyConfig(creator.clone()), &config);
     let lineage = ContentLineage {
         creator: creator.clone(),
         parent_creator: original_creator.clone(),
         royalty_config: config,
     };
-    env.storage().persistent().set(&DataKey::ContentLineage(creator.clone()), &lineage);
+    env.storage()
+        .persistent()
+        .set(&DataKey::ContentLineage(creator.clone()), &lineage);
 }
 
 /// Distribute royalties along the lineage chain (legacy).
-pub fn distribute_royalties(env: &Env, creator: &Address, token_addr: &Address, tip_amount: i128) -> i128 {
+pub fn distribute_royalties(
+    env: &Env,
+    creator: &Address,
+    token_addr: &Address,
+    tip_amount: i128,
+) -> i128 {
     let mut remaining = tip_amount;
     let mut current = creator.clone();
     let mut depth = 0u32;
     loop {
-        let lineage: Option<ContentLineage> = env.storage().persistent().get(&DataKey::ContentLineage(current.clone()));
-        let lineage = match lineage { Some(l) => l, None => break };
-        if depth >= lineage.royalty_config.max_depth { break; }
+        let lineage: Option<ContentLineage> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ContentLineage(current.clone()));
+        let lineage = match lineage {
+            Some(l) => l,
+            None => break,
+        };
+        if depth >= lineage.royalty_config.max_depth {
+            break;
+        }
         let royalty = (remaining * lineage.royalty_config.rate_bps as i128) / 10_000;
-        if royalty <= 0 { break; }
-        let bal_key = DataKey::RoyaltyBalance(lineage.royalty_config.original_creator.clone(), token_addr.clone());
+        if royalty <= 0 {
+            break;
+        }
+        let bal_key = DataKey::RoyaltyBalance(
+            lineage.royalty_config.original_creator.clone(),
+            token_addr.clone(),
+        );
         let current_bal: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
-        env.storage().persistent().set(&bal_key, &(current_bal + royalty));
+        env.storage()
+            .persistent()
+            .set(&bal_key, &(current_bal + royalty));
         env.events().publish(
             (symbol_short!("royalty"),),
-            (lineage.royalty_config.original_creator.clone(), creator.clone(), royalty, depth),
+            (
+                lineage.royalty_config.original_creator.clone(),
+                creator.clone(),
+                royalty,
+                depth,
+            ),
         );
         remaining -= royalty;
         current = lineage.royalty_config.original_creator.clone();

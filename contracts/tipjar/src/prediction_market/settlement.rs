@@ -8,11 +8,7 @@ use super::{BettorPosition, Outcome, PredictionMarket, BPS_DENOM};
 ///
 /// Payout = (bettor's winning-side stake / total winning-side pool) × total pool × (1 - fee).
 /// Returns 0 if the bettor had no stake on the winning side.
-pub fn calculate_payout(
-    _env: &Env,
-    market: &PredictionMarket,
-    position: &BettorPosition,
-) -> i128 {
+pub fn calculate_payout(_env: &Env, market: &PredictionMarket, position: &BettorPosition) -> i128 {
     let winning = match market.winning_outcome {
         Some(o) => o,
         None => return 0,

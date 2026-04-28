@@ -2,8 +2,8 @@
 //!
 //! This module provides staking functionality with time-weighted rewards.
 
-pub mod rewards;
 pub mod distribution;
+pub mod rewards;
 
 use soroban_sdk::{contracttype, token, Address, Env};
 
@@ -23,10 +23,10 @@ pub struct StakeInfo {
 pub struct StakingConfig {
     pub reward_pool: i128,
     pub total_staked: i128,
-    pub reward_rate_bps: u32, // Reward rate in basis points per year
-    pub unstake_cooldown: u64, // Cooldown period in seconds
+    pub reward_rate_bps: u32,      // Reward rate in basis points per year
+    pub unstake_cooldown: u64,     // Cooldown period in seconds
     pub max_time_multiplier: i128, // Maximum time multiplier (e.g., 2_000_000 for 2x)
-    pub time_weight_period: u64, // Period for time weighting in seconds
+    pub time_weight_period: u64,   // Period for time weighting in seconds
 }
 
 /// Storage keys for staking
@@ -109,7 +109,9 @@ pub fn get_total_staked(env: &Env) -> i128 {
 
 /// Update total staked amount
 pub fn update_total_staked(env: &Env, amount: i128) {
-    env.storage().persistent().set(&DataKey::TotalStaked, &amount);
+    env.storage()
+        .persistent()
+        .set(&DataKey::TotalStaked, &amount);
 }
 
 /// Get reward pool balance
@@ -122,7 +124,9 @@ pub fn get_reward_pool(env: &Env) -> i128 {
 
 /// Update reward pool balance
 pub fn update_reward_pool(env: &Env, amount: i128) {
-    env.storage().persistent().set(&DataKey::RewardPool, &amount);
+    env.storage()
+        .persistent()
+        .set(&DataKey::RewardPool, &amount);
 }
 
 /// Get staked token address

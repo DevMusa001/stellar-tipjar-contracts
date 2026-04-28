@@ -169,11 +169,7 @@ fn ring_index_back(write_index: u32, offset: u32, capacity: u32) -> u32 {
 /// Collects up to `max_observations` observations going backwards from the
 /// current write position, stopping when we exceed `window_seconds`.
 /// Returns observations in chronological order (oldest first).
-fn collect_window(
-    env: &Env,
-    oracle: &TwapOracle,
-    window_seconds: u64,
-) -> Vec<Observation> {
+fn collect_window(env: &Env, oracle: &TwapOracle, window_seconds: u64) -> Vec<Observation> {
     let mut result: Vec<Observation> = Vec::new(env);
 
     let total_written = oracle.observation_count;
@@ -276,7 +272,12 @@ pub fn create_oracle(
 
     env.events().publish(
         (symbol_short!("twap_new"),),
-        (oracle_id, base_token.clone(), quote_token.clone(), initial_price),
+        (
+            oracle_id,
+            base_token.clone(),
+            quote_token.clone(),
+            initial_price,
+        ),
     );
 
     oracle_id
@@ -308,12 +309,11 @@ pub fn record_price(env: &Env, updater: &Address, oracle_id: u64, price: i128) {
     }
 
     // Fetch the previous observation to compute the new accumulator
-    let prev = get_observation(env, oracle_id, oracle.write_index)
-        .unwrap_or(Observation {
-            timestamp: now,
-            price_cumulative: 0,
-            price,
-        });
+    let prev = get_observation(env, oracle_id, oracle.write_index).unwrap_or(Observation {
+        timestamp: now,
+        price_cumulative: 0,
+        price,
+    });
 
     let elapsed = now.saturating_sub(prev.timestamp);
     let new_accumulator = prev
@@ -494,8 +494,6 @@ pub fn deactivate_oracle(env: &Env, updater: &Address, oracle_id: u64) {
     oracle.active = false;
     set_oracle(env, &oracle);
 
-    env.events().publish(
-        (symbol_short!("twap_off"),),
-        (oracle_id,),
-    );
+    env.events()
+        .publish((symbol_short!("twap_off"),), (oracle_id,));
 }

@@ -135,7 +135,13 @@ fn test_all_events_have_timestamps() {
     });
 
     // Emit various events - they should all use the ledger timestamp
-    emit_synthetic_asset_created(&env, asset_id, creator.clone(), backing_token.clone(), 15000);
+    emit_synthetic_asset_created(
+        &env,
+        asset_id,
+        creator.clone(),
+        backing_token.clone(),
+        15000,
+    );
     emit_synthetic_tokens_minted(&env, asset_id, minter.clone(), 1000, 1500);
     emit_price_updated(&env, asset_id, 1200);
     emit_supply_updated(&env, asset_id, 10000);

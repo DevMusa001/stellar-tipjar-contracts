@@ -27,7 +27,11 @@ impl Ctx {
         let c = TipJarContractClient::new(&env, &contract_id);
         c.init(&admin);
         c.add_token(&admin, &token);
-        Ctx { env, contract_id, token }
+        Ctx {
+            env,
+            contract_id,
+            token,
+        }
     }
 
     fn c(&self) -> TipJarContractClient {
@@ -87,7 +91,10 @@ fn test_withdrawal() {
     ctx.c().withdraw(&creator, &ctx.token);
     assert_eq!(ctx.c().get_withdrawable_balance(&creator, &ctx.token), 0);
     assert_eq!(ctx.c().get_total_tips(&creator, &ctx.token), 500);
-    assert_eq!(token::Client::new(&ctx.env, &ctx.token).balance(&creator), 500);
+    assert_eq!(
+        token::Client::new(&ctx.env, &ctx.token).balance(&creator),
+        500
+    );
 }
 
 #[test]
@@ -103,7 +110,11 @@ fn test_full_withdrawal() {
 fn test_insufficient_balance_rejected() {
     let ctx = Ctx::new();
     let creator = ctx.creator();
-    let err = ctx.c().try_withdraw(&creator, &ctx.token).unwrap_err().unwrap();
+    let err = ctx
+        .c()
+        .try_withdraw(&creator, &ctx.token)
+        .unwrap_err()
+        .unwrap();
     assert_eq!(err, TipJarError::NothingToWithdraw.into());
 }
 
@@ -112,7 +123,11 @@ fn test_invalid_amount_rejected() {
     let ctx = Ctx::new();
     let (tipper, creator) = (ctx.tipper(), ctx.creator());
     for bad in [0i128, -1i128] {
-        let err = ctx.c().try_tip(&tipper, &creator, &ctx.token, &bad).unwrap_err().unwrap();
+        let err = ctx
+            .c()
+            .try_tip(&tipper, &creator, &ctx.token, &bad)
+            .unwrap_err()
+            .unwrap();
         assert_eq!(err, TipJarError::InvalidAmount.into());
     }
 }

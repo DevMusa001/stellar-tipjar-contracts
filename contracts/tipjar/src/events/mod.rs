@@ -119,12 +119,7 @@ pub fn emit_tip_event(
 }
 
 /// Emit a withdraw event with enhanced metadata
-pub fn emit_withdraw_event(
-    env: &Env,
-    creator: &Address,
-    amount: i128,
-    token: &Address,
-) {
+pub fn emit_withdraw_event(env: &Env, creator: &Address, amount: i128, token: &Address) {
     let event = WithdrawEvent {
         version: EVENT_VERSION,
         creator: creator.clone(),
@@ -210,12 +205,7 @@ pub fn get_events_by_creator(
 }
 
 /// Get events by time range
-pub fn get_events_by_timerange(
-    env: &Env,
-    start: u64,
-    end: u64,
-    limit: u32,
-) -> Vec<TipEvent> {
+pub fn get_events_by_timerange(env: &Env, start: u64, end: u64, limit: u32) -> Vec<TipEvent> {
     let filter = EventFilter {
         event_type: None,
         sender: None,
@@ -238,11 +228,7 @@ pub fn get_events_by_timerange(
 }
 
 /// Get events by sender
-pub fn get_events_by_sender(
-    env: &Env,
-    sender: &Address,
-    limit: u32,
-) -> Vec<TipEvent> {
+pub fn get_events_by_sender(env: &Env, sender: &Address, limit: u32) -> Vec<TipEvent> {
     let filter = EventFilter {
         event_type: None,
         sender: Some(sender.clone()),
@@ -265,11 +251,7 @@ pub fn get_events_by_sender(
 }
 
 /// Get events by token
-pub fn get_events_by_token(
-    env: &Env,
-    token: &Address,
-    limit: u32,
-) -> Vec<TipEvent> {
+pub fn get_events_by_token(env: &Env, token: &Address, limit: u32) -> Vec<TipEvent> {
     let filter = EventFilter {
         event_type: None,
         sender: None,

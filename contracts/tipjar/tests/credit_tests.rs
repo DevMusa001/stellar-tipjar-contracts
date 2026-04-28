@@ -8,7 +8,13 @@ use soroban_sdk::{
 };
 use tipjar::{CreditConfig, TipJarContract, TipJarContractClient};
 
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -41,7 +47,16 @@ fn provide_lending_liquidity(
     amount: i128,
 ) {
     // insurance_contribute routes premium into platform fee balance.
-    client.insurance_set_config(admin, &1i128, &2_000_000i128, &500u32, &8_000u32, &0u64, &0u32, &0u32);
+    client.insurance_set_config(
+        admin,
+        &1i128,
+        &2_000_000i128,
+        &500u32,
+        &8_000u32,
+        &0u64,
+        &0u32,
+        &0u32,
+    );
     let funder = Address::generate(env);
     let token_client = soroban_sdk::token::StellarAssetClient::new(env, token);
     token_client.mint(&funder, &(amount + 10_000));
@@ -55,9 +70,9 @@ fn test_credit_limit_and_borrow() {
 
     let config = CreditConfig {
         max_credit_ratio_bps: 2000, // 20%
-        interest_rate_bps: 100,      // 1% per 30 days
+        interest_rate_bps: 100,     // 1% per 30 days
         min_total_tips: 1000,
-        repayment_share_bps: 5000,   // 50%
+        repayment_share_bps: 5000, // 50%
         enabled: true,
     };
     client.set_credit_config(&admin, &config);
@@ -90,9 +105,9 @@ fn test_interest_accrual_and_manual_repayment() {
 
     let config = CreditConfig {
         max_credit_ratio_bps: 5000, // 50%
-        interest_rate_bps: 1000,     // 10% per 30 days
+        interest_rate_bps: 1000,    // 10% per 30 days
         min_total_tips: 0,
-        repayment_share_bps: 0,      // disable auto repayment for this test
+        repayment_share_bps: 0, // disable auto repayment for this test
         enabled: true,
     };
     client.set_credit_config(&admin, &config);

@@ -172,7 +172,13 @@ pub fn record_tip(
 
     env.events().publish(
         (symbol_short!("tch_tip"),),
-        (tipper.clone(), creator.clone(), token.clone(), tip_amount, nonce),
+        (
+            tipper.clone(),
+            creator.clone(),
+            token.clone(),
+            tip_amount,
+            nonce,
+        ),
     );
 }
 
@@ -200,7 +206,13 @@ pub fn settle(env: &Env, tipper: &Address, creator: &Address, token: &Address) {
 
     env.events().publish(
         (symbol_short!("tch_setl"),),
-        (tipper.clone(), creator.clone(), token.clone(), to_creator, to_tipper),
+        (
+            tipper.clone(),
+            creator.clone(),
+            token.clone(),
+            to_creator,
+            to_tipper,
+        ),
     );
 }
 
@@ -242,7 +254,14 @@ pub fn dispute(
 
             env.events().publish(
                 (symbol_short!("tch_disp"),),
-                (caller.clone(), tipper.clone(), creator.clone(), token.clone(), claimed_tipped_amount, nonce),
+                (
+                    caller.clone(),
+                    tipper.clone(),
+                    creator.clone(),
+                    token.clone(),
+                    claimed_tipped_amount,
+                    nonce,
+                ),
             );
         }
         TipChannelStatus::Disputed => {
@@ -260,7 +279,14 @@ pub fn dispute(
 
                 env.events().publish(
                     (symbol_short!("tch_disp"),),
-                    (caller.clone(), tipper.clone(), creator.clone(), token.clone(), claimed_tipped_amount, nonce),
+                    (
+                        caller.clone(),
+                        tipper.clone(),
+                        creator.clone(),
+                        token.clone(),
+                        claimed_tipped_amount,
+                        nonce,
+                    ),
                 );
             } else {
                 // Window elapsed — finalise with last submitted state.
@@ -280,7 +306,13 @@ pub fn dispute(
 
                 env.events().publish(
                     (symbol_short!("tch_fin"),),
-                    (tipper.clone(), creator.clone(), token.clone(), to_creator, to_tipper),
+                    (
+                        tipper.clone(),
+                        creator.clone(),
+                        token.clone(),
+                        to_creator,
+                        to_tipper,
+                    ),
                 );
             }
         }

@@ -120,13 +120,7 @@ fn bench_tip_no_message(c: &mut Criterion) {
             let creator = Address::generate(&env);
             token_client.mint(&sender, &1_000);
 
-            client.tip_with_message(
-                &sender,
-                &creator,
-                &token_id,
-                black_box(&100i128),
-                &None,
-            );
+            client.tip_with_message(&sender, &creator, &token_id, black_box(&100i128), &None);
         });
     });
 }

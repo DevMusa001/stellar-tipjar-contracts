@@ -11,7 +11,13 @@ use tipjar::{
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /// Returns (env, client, admin, token, contract_id).
-fn setup() -> (Env, TipJarContractClient<'static>, Address, Address, Address) {
+fn setup() -> (
+    Env,
+    TipJarContractClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -81,7 +87,9 @@ fn test_contribute_basic() {
 
     client.qf_contribute(&contributor, &round_id, &project, &100);
 
-    let c = client.qf_get_contribution(&round_id, &project, &contributor).unwrap();
+    let c = client
+        .qf_get_contribution(&round_id, &project, &contributor)
+        .unwrap();
     assert_eq!(c.amount, 100);
     assert_eq!(c.contributor, contributor);
     assert_eq!(c.project, project);
@@ -217,7 +225,10 @@ fn test_distribute_matching_two_projects() {
     let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
     let bal_a = token_client.balance(&project_a);
     let bal_b = token_client.balance(&project_b);
-    assert!(bal_a > bal_b, "project_a should receive more matching: {bal_a} vs {bal_b}");
+    assert!(
+        bal_a > bal_b,
+        "project_a should receive more matching: {bal_a} vs {bal_b}"
+    );
 
     // Total distributed = matching_pool (contributions are returned to contributors).
     assert_eq!(bal_a + bal_b, matching_pool);

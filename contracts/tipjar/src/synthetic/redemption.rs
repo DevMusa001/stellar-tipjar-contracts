@@ -3,12 +3,18 @@
 //! Manages the burning of synthetic tokens and distribution of underlying
 //! value back to token holders.
 
-use soroban_sdk::{token, Address, Env};
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
-use super::types::SyntheticAsset;
 use super::events::emit_synthetic_tokens_redeemed;
 use super::oracle::get_oracle_price;
-use super::supply::{update_supply, update_collateral};
+use super::supply::{update_collateral, update_supply};
+use super::types::SyntheticAsset;
+use crate::{
+    AuctionError, AuctionKey, BridgeKey, CircuitBreakerKey, CoreError, CreditError, DataKey,
+    DelegationKey, DisputeKey, FeatureError, FeeKey, InsuranceKey, LimitKey, LockedTipKey,
+    MatchingKey, MilestoneKey, MultiSigKey, OptionKey, OtherError, PrivateTipKey, RoleKey,
+    SnapshotKey, StatsKey, StreamError, StreamKey, SyntheticKey, SystemError, TipJarError,
+    VestingError, VestingKey,
+};
+use soroban_sdk::{token, Address, Env};
 
 /// Calculates redemption value for a token amount
 ///
@@ -80,11 +86,7 @@ pub fn redeem(
 
     // Verify holder owns sufficient synthetic tokens
     let balance_key = DataKey::Synthetic(SyntheticKey::SyntheticBalance(holder.clone(), asset_id));
-    let current_balance: i128 = env
-        .storage()
-        .persistent()
-        .get(&balance_key)
-        .unwrap_or(0);
+    let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
 
     if current_balance < amount {
         return Err(CoreError::InsufficientBalance);
@@ -94,7 +96,8 @@ pub fn redeem(
     let redemption_value = calculate_redemption_value(env, asset_id, amount)?;
 
     // Check if tip pool has sufficient balance for redemption
-    let creator_balance_key = DataKey::CreatorBalance(asset.creator.clone(), asset.backing_token.clone());
+    let creator_balance_key =
+        DataKey::CreatorBalance(asset.creator.clone(), asset.backing_token.clone());
     let tip_pool_balance: i128 = env
         .storage()
         .persistent()
@@ -109,7 +112,7 @@ pub fn redeem(
     let new_balance = current_balance
         .checked_sub(amount)
         .ok_or(CoreError::InvalidAmount)?;
-    
+
     if new_balance == 0 {
         env.storage().persistent().remove(&balance_key);
     } else {
@@ -120,16 +123,15 @@ pub fn redeem(
     update_supply(env, asset_id, -amount)?;
 
     // Unlock collateral from tip pool (update SyntheticCollateral storage)
-    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(asset.creator.clone(), asset.backing_token.clone()));
-    let current_locked: i128 = env
-        .storage()
-        .persistent()
-        .get(&collateral_key)
-        .unwrap_or(0);
+    let collateral_key = DataKey::Synthetic(SyntheticKey::SyntheticCollateral(
+        asset.creator.clone(),
+        asset.backing_token.clone(),
+    ));
+    let current_locked: i128 = env.storage().persistent().get(&collateral_key).unwrap_or(0);
     let new_locked = current_locked
         .checked_sub(redemption_value)
         .ok_or(CoreError::InvalidAmount)?;
-    
+
     if new_locked == 0 {
         env.storage().persistent().remove(&collateral_key);
     } else {
@@ -144,11 +146,13 @@ pub fn redeem(
     let new_tip_pool_balance = tip_pool_balance
         .checked_sub(redemption_value)
         .ok_or(CoreError::InvalidAmount)?;
-    
+
     if new_tip_pool_balance == 0 {
         env.storage().persistent().remove(&creator_balance_key);
     } else {
-        env.storage().persistent().set(&creator_balance_key, &new_tip_pool_balance);
+        env.storage()
+            .persistent()
+            .set(&creator_balance_key, &new_tip_pool_balance);
     }
 
     // Update total collateral (decrease)

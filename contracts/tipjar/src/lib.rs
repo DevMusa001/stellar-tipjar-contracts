@@ -81,6 +81,9 @@ pub mod bonding_curve;
 // Quadratic funding
 pub mod quadratic_funding;
 
+// Retroactive public goods funding
+pub mod retroactive_funding;
+
 // TWAP oracle
 pub mod twap_oracle;
 
@@ -954,6 +957,8 @@ pub enum DataKey {
     ValidityProof(validity_proof::ValidityProofKey),
     /// Verkle tree sub-keys.
     Verkle(verkle_tree::VerkleKey),
+    /// Retroactive public goods funding sub-keys.
+    Retro(retroactive_funding::RetroKey),
 }
 
 #[contracterror]
@@ -9177,6 +9182,88 @@ impl TipJarContract {
     /// Returns the estimated matching amount for `project` in `round_id`.
     pub fn qf_get_match_estimate(env: Env, round_id: u64, project: Address) -> i128 {
         quadratic_funding::get_match_estimate(&env, round_id, &project)
+    }
+
+    // ── Retroactive Public Goods Funding ─────────────────────────────────────
+
+    /// Creates a retroactive funding round.
+    ///
+    /// Transfers `reward_pool` tokens from `admin` into the contract.
+    /// `criteria` weights must sum to 10 000 bps.
+    /// Emits `("retro_new",)` with `(round_id, token, reward_pool, end_time)`.
+    pub fn retro_create_round(
+        env: Env,
+        admin: Address,
+        token: Address,
+        reward_pool: i128,
+        start_time: u64,
+        end_time: u64,
+        criteria: retroactive_funding::EvalCriteria,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        retroactive_funding::create_round(&env, &admin, &token, reward_pool, start_time, end_time, criteria)
+    }
+
+    /// Nominates a creator as eligible for rewards in a round. Admin only.
+    ///
+    /// Emits `("retro_nom",)` with `(round_id, creator)`.
+    pub fn retro_nominate_creator(env: Env, admin: Address, round_id: u64, creator: Address) {
+        Self::require_not_paused(&env);
+        retroactive_funding::nominate_creator(&env, &admin, round_id, &creator);
+    }
+
+    /// Casts a vote for a nominated creator in an active round.
+    ///
+    /// Each voter may vote once per round. Vote weight is derived from the voter's
+    /// own tip history (sqrt-weighted).
+    /// Emits `("retro_vot",)` with `(round_id, voter, creator, weight)`.
+    pub fn retro_cast_vote(env: Env, voter: Address, round_id: u64, creator: Address) {
+        Self::require_not_paused(&env);
+        retroactive_funding::cast_vote(&env, &voter, round_id, &creator);
+    }
+
+    /// Finalizes a round after the voting window closes. Admin only.
+    ///
+    /// Emits `("retro_fin",)` with `(round_id, total_votes)`.
+    pub fn retro_finalize_round(env: Env, admin: Address, round_id: u64) {
+        Self::require_not_paused(&env);
+        retroactive_funding::finalize_round(&env, &admin, round_id);
+    }
+
+    /// Computes a creator's impact score for a round.
+    ///
+    /// Score combines historical tips, tip count, and vote weight per `EvalCriteria`.
+    pub fn retro_compute_impact_score(env: Env, round_id: u64, creator: Address) -> i128 {
+        retroactive_funding::compute_impact_score(&env, round_id, &creator)
+    }
+
+    /// Claims the retroactive reward for a creator in a finalized round.
+    ///
+    /// Reward is proportional to the creator's impact score relative to all nominees.
+    /// Emits `("retro_clm",)` with `(round_id, creator, amount)`.
+    pub fn retro_claim_reward(env: Env, creator: Address, round_id: u64) -> i128 {
+        Self::require_not_paused(&env);
+        retroactive_funding::claim_reward(&env, &creator, round_id)
+    }
+
+    /// Returns a retroactive funding round by ID.
+    pub fn retro_get_round(env: Env, round_id: u64) -> retroactive_funding::RetroRound {
+        retroactive_funding::get_round(&env, round_id)
+    }
+
+    /// Returns the nominated creators for a round.
+    pub fn retro_get_round_creators(env: Env, round_id: u64) -> Vec<Address> {
+        retroactive_funding::get_round_creators(&env, round_id)
+    }
+
+    /// Returns the aggregated vote weight for a creator in a round.
+    pub fn retro_get_creator_votes(env: Env, round_id: u64, creator: Address) -> i128 {
+        retroactive_funding::get_creator_votes(&env, round_id, &creator)
+    }
+
+    /// Returns whether a voter has already voted in a round.
+    pub fn retro_has_voted(env: Env, round_id: u64, voter: Address) -> bool {
+        retroactive_funding::has_voted(&env, round_id, &voter)
     }
 
     // ── Conviction Voting ────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 use soroban_sdk::{panic_with_error, token, Address, Env};
 
-use crate::{DataKey, TipJarError, CoreError, SystemError, FeatureError, VestingError, StreamError, AuctionError, CreditError, OtherError, VestingKey, StreamKey, AuctionKey, MultiSigKey, DisputeKey, PrivateTipKey, InsuranceKey, OptionKey, BridgeKey, SyntheticKey, CircuitBreakerKey, MilestoneKey, RoleKey, StatsKey, LockedTipKey, MatchingKey, FeeKey, SnapshotKey, LimitKey, DelegationKey};
+use crate::{DataKey, TipJarError, CoreError};
 
 use super::{rewards, FarmingPool, FarmingPosition};
 

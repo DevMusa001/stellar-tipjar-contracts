@@ -977,6 +977,34 @@ pub enum TipJarError {
     RoleNotFound = 10,
     InsufficientBalance = 11,
     AmountTooSmall = 12,
+    /// Farming pool not found.
+    FarmingPoolNotFound = 13,
+    /// Farming position not found.
+    FarmingPositionNotFound = 14,
+    /// Farming lock period has not expired yet.
+    FarmingLockNotExpired = 15,
+    /// Liquidity mining program not found.
+    LmProgramNotFound = 16,
+    /// Liquidity mining position not found.
+    LmPositionNotFound = 17,
+    /// Invalid reward rate for LM program.
+    LmInvalidRate = 18,
+    /// Invalid vesting parameters for LM program.
+    LmInvalidVesting = 19,
+    /// Invalid end time for LM program.
+    LmInvalidEndTime = 20,
+    /// LM program is inactive.
+    LmProgramInactive = 21,
+    /// LM program has ended.
+    LmProgramEnded = 22,
+    /// No rewards available to claim.
+    LmNothingToClaim = 23,
+    /// All rewards have been distributed.
+    LmRewardsExhausted = 24,
+    /// Boost multiplier is not higher than current.
+    LmBoostTooLow = 25,
+    /// Invalid duration parameter.
+    InvalidDuration = 26,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]

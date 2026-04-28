@@ -85,6 +85,12 @@ pub mod twap_oracle;
 // Tip payment channels
 pub mod payment_channel;
 
+// Yield farming
+pub mod farming;
+
+// Liquidity mining
+pub mod liquidity_mining;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -851,6 +857,20 @@ pub enum DataKey {
     PaymentChannel(Address, Address, Address),
     /// Global counter for payment channel IDs.
     ChannelCounter,
+    /// Farming pool record keyed by pool_id.
+    FarmingPool(u64),
+    /// Farming position keyed by (pool_id, staker).
+    FarmingPosition(u64, Address),
+    /// Global counter for farming pool IDs.
+    FarmingPoolCounter,
+    /// Liquidity mining program keyed by program_id.
+    LmProgram(u64),
+    /// Liquidity mining position keyed by (program_id, provider).
+    LmPosition(u64, Address),
+    /// Global counter for LM program IDs.
+    LmProgramCounter,
+    /// List of program IDs a provider has participated in.
+    LmProviderPrograms(Address),
 }
 
 #[contracterror]
@@ -869,6 +889,34 @@ pub enum TipJarError {
     RoleNotFound = 10,
     InsufficientBalance = 11,
     AmountTooSmall = 12,
+    /// Farming pool not found.
+    FarmingPoolNotFound = 13,
+    /// Farming position not found.
+    FarmingPositionNotFound = 14,
+    /// Farming lock period has not expired yet.
+    FarmingLockNotExpired = 15,
+    /// Liquidity mining program not found.
+    LmProgramNotFound = 16,
+    /// Liquidity mining position not found.
+    LmPositionNotFound = 17,
+    /// Invalid reward rate for LM program.
+    LmInvalidRate = 18,
+    /// Invalid vesting parameters for LM program.
+    LmInvalidVesting = 19,
+    /// Invalid end time for LM program.
+    LmInvalidEndTime = 20,
+    /// LM program is inactive.
+    LmProgramInactive = 21,
+    /// LM program has ended.
+    LmProgramEnded = 22,
+    /// No rewards available to claim.
+    LmNothingToClaim = 23,
+    /// All rewards have been distributed.
+    LmRewardsExhausted = 24,
+    /// Boost multiplier is not higher than current.
+    LmBoostTooLow = 25,
+    /// Invalid duration parameter.
+    InvalidDuration = 26,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -8862,6 +8910,93 @@ a
         let finalized_batches: u64 = env.storage().instance().get(&DataKey::RollupFinalizedCount).unwrap_or(0);
         let challenged_batches: u64 = env.storage().instance().get(&DataKey::RollupChallengedCount).unwrap_or(0);
         rollup::RollupState { enabled, sequencer, challenge_period, pending_batches, finalized_batches, challenged_batches }
+    }
+
+    // ── yield farming ─────────────────────────────────────────────────────────
+
+    /// Creates a new farming pool. Admin only.
+    ///
+    /// * `lp_token`         — LP token stakers must deposit.
+    /// * `reward_token`     — token distributed as rewards.
+    /// * `reward_rate_bps`  — annual reward rate in basis points (e.g. 2000 = 20 %).
+    /// * `lock_period`      — seconds stakers must wait before unstaking.
+    ///
+    /// Returns the new pool ID.
+    /// Emits `("farm_create",)` with `(pool_id, lp_token, reward_token, reward_rate_bps)`.
+    pub fn farm_create_pool(
+        env: Env,
+        admin: Address,
+        lp_token: Address,
+        reward_token: Address,
+        reward_rate_bps: u32,
+        lock_period: u64,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if admin != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        if reward_rate_bps == 0 {
+            panic_with_error!(&env, TipJarError::InvalidAmount);
+        }
+        let pool_id = farming::pool::create_pool(&env, &lp_token, &reward_token, reward_rate_bps, lock_period);
+        env.events().publish(
+            (symbol_short!("farm_crt"),),
+            (pool_id, lp_token, reward_token, reward_rate_bps),
+        );
+        pool_id
+    }
+
+    /// Stakes `amount` LP tokens into a farming pool.
+    ///
+    /// Emits `("farm_stake",)` with `(staker, pool_id, amount)`.
+    pub fn farm_stake(env: Env, staker: Address, pool_id: u64, amount: i128) {
+        Self::require_not_paused(&env);
+        farming::pool::stake(&env, &staker, pool_id, amount);
+        env.events().publish(
+            (symbol_short!("farm_stk"),),
+            (staker, pool_id, amount),
+        );
+    }
+
+    /// Unstakes `amount` LP tokens from a farming pool after the lock period.
+    ///
+    /// Emits `("farm_unstake",)` with `(staker, pool_id, amount)`.
+    pub fn farm_unstake(env: Env, staker: Address, pool_id: u64, amount: i128) {
+        Self::require_not_paused(&env);
+        farming::pool::unstake(&env, &staker, pool_id, amount);
+        env.events().publish(
+            (symbol_short!("farm_ust"),),
+            (staker, pool_id, amount),
+        );
+    }
+
+    /// Harvests all accrued rewards from a farming pool. Returns the amount harvested.
+    ///
+    /// Emits `("farm_harvest",)` with `(staker, pool_id, rewards)`.
+    pub fn farm_harvest(env: Env, staker: Address, pool_id: u64) -> i128 {
+        Self::require_not_paused(&env);
+        let rewards = farming::pool::harvest(&env, &staker, pool_id);
+        env.events().publish(
+            (symbol_short!("farm_hrv"),),
+            (staker, pool_id, rewards),
+        );
+        rewards
+    }
+
+    /// Returns a farming pool by ID.
+    pub fn farm_get_pool(env: Env, pool_id: u64) -> Option<farming::FarmingPool> {
+        farming::pool::get_pool(&env, pool_id)
+    }
+
+    /// Returns a staker's position in a farming pool.
+    pub fn farm_get_position(
+        env: Env,
+        pool_id: u64,
+        staker: Address,
+    ) -> Option<farming::FarmingPosition> {
+        farming::pool::get_position(&env, pool_id, &staker)
     }
 }
 

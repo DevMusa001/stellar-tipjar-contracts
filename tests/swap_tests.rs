@@ -122,7 +122,7 @@ fn test_execute_swap_rejects_wrong_preimage() {
     let ctx = TestContext::new();
     let (_initiator, _recipient, _preimage, _hash_lock, _time_lock) = setup_swap(&ctx);
 
-    let wrong = BytesN::from_array(&ctx.env, b"wrong_preimage_wrong_preimage!!!!");
+    let wrong = BytesN::from_array(&ctx.env, b"wrong_preimage_wrong_preimage!!!");
     let result = ctx.tipjar_client.try_execute_swap(&1, &wrong);
     assert_error_contains(result, TipJarError::InvalidPreimage);
 }

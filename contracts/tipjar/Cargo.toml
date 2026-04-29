@@ -107,3 +107,7 @@ path = "tests/derivatives_tests.rs"
 name = "plasma_tests"
 path = "tests/plasma_tests.rs"
 
+[[test]]
+name = "identity_credentials_tests"
+path = "tests/identity_credentials_tests.rs"
+

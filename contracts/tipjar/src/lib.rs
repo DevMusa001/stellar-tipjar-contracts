@@ -117,6 +117,18 @@ pub mod verkle_tree;
 // On-chain reputation system
 pub mod reputation;
 
+// Decentralized identity (DID) for creator verification
+pub mod did;
+
+// Verifiable credentials for creator achievements
+pub mod verifiable_credentials;
+
+// Non-transferable reputation tokens
+pub mod reputation_tokens;
+
+// Composable NFTs for tip receipts
+pub mod composable_nft;
+
 /// A tip record that includes an optional memo and timestamp.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -959,6 +971,14 @@ pub enum DataKey {
     Verkle(verkle_tree::VerkleKey),
     /// Retroactive public goods funding sub-keys.
     Retro(retroactive_funding::RetroKey),
+    /// Decentralized identity sub-keys.
+    Did(did::DidKey),
+    /// Verifiable credential sub-keys.
+    Vc(verifiable_credentials::VcKey),
+    /// Reputation token sub-keys.
+    RepToken(reputation_tokens::RepTokenKey),
+    /// Composable NFT sub-keys.
+    Nft(composable_nft::NftKey),
 }
 
 #[contracterror]
@@ -11094,5 +11114,216 @@ impl TipJarContract {
     /// List all puzzle IDs targeting a recipient.
     pub fn get_recipient_puzzles(env: Env, recipient: Address) -> Vec<u64> {
         time_lock_puzzle::get_recipient_puzzles(&env, &recipient)
+    }
+
+    // ── Decentralized Identity (#308) ─────────────────────────────────────────
+
+    /// Register a new DID for the caller.
+    ///
+    /// Emits `("did_reg",)` with `(did_id, owner)`.
+    pub fn did_register(
+        env: Env,
+        owner: Address,
+        did_string: String,
+        method: did::DidMethod,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        did::register_did(&env, &owner, did_string, method)
+    }
+
+    /// Update an existing DID record. Only the owner may update.
+    pub fn did_update(env: Env, owner: Address, did_id: u64, did_string: String) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        did::update_did(&env, &owner, did_id, did_string);
+    }
+
+    /// Add a claim to a DID.
+    pub fn did_add_claim(
+        env: Env,
+        owner: Address,
+        did_id: u64,
+        claim_type: String,
+        claim_value: String,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        // Verify caller owns the DID.
+        let d = did::get_did(&env, did_id).unwrap_or_else(|| panic_with_error!(&env, TipJarError::Unauthorized));
+        if d.owner != owner {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        did::add_claim(&env, did_id, claim_type, claim_value)
+    }
+
+    /// Verify a DID claim. Admin or designated verifier only.
+    pub fn did_verify_claim(env: Env, verifier: Address, claim_id: u64) {
+        verifier.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if verifier != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        did::verify_claim(&env, &verifier, claim_id);
+    }
+
+    /// Get a DID record.
+    pub fn did_get(env: Env, did_id: u64) -> Option<did::Did> {
+        did::get_did(&env, did_id)
+    }
+
+    /// Get all DID IDs for an owner.
+    pub fn did_get_owner_dids(env: Env, owner: Address) -> Vec<u64> {
+        did::get_owner_dids(&env, &owner)
+    }
+
+    /// Get all claim IDs for a DID.
+    pub fn did_get_claims(env: Env, did_id: u64) -> Vec<u64> {
+        did::get_did_claims(&env, did_id)
+    }
+
+    /// Get a claim record.
+    pub fn did_get_claim(env: Env, claim_id: u64) -> Option<did::IdentityClaim> {
+        did::get_claim(&env, claim_id)
+    }
+
+    // ── Verifiable Credentials (#309) ─────────────────────────────────────────
+
+    /// Issue a verifiable credential. Admin only.
+    ///
+    /// Emits `("vc_issue",)` with `(id, issuer, subject)`.
+    pub fn vc_issue(
+        env: Env,
+        issuer: Address,
+        subject: Address,
+        schema: String,
+        credential_data: String,
+        expires_at: Option<u64>,
+    ) -> u64 {
+        Self::require_not_paused(&env);
+        issuer.require_auth();
+        verifiable_credentials::issue_credential(
+            &env,
+            &issuer,
+            &subject,
+            schema,
+            credential_data,
+            expires_at,
+        )
+    }
+
+    /// Verify a credential is active and not expired.
+    pub fn vc_verify(env: Env, credential_id: u64) -> bool {
+        verifiable_credentials::verify_credential(&env, credential_id)
+    }
+
+    /// Revoke a credential. Only the issuer may revoke.
+    ///
+    /// Emits `("vc_rev",)` with `(credential_id, issuer)`.
+    pub fn vc_revoke(env: Env, issuer: Address, credential_id: u64) {
+        Self::require_not_paused(&env);
+        issuer.require_auth();
+        verifiable_credentials::revoke_credential(&env, &issuer, credential_id);
+    }
+
+    /// Get a credential record.
+    pub fn vc_get(env: Env, credential_id: u64) -> Option<verifiable_credentials::VerifiableCredential> {
+        verifiable_credentials::get_credential(&env, credential_id)
+    }
+
+    /// Get all credential IDs for a subject.
+    pub fn vc_get_subject_credentials(env: Env, subject: Address) -> Vec<u64> {
+        verifiable_credentials::get_subject_credentials(&env, &subject)
+    }
+
+    /// Get all credential IDs issued by an issuer.
+    pub fn vc_get_issuer_credentials(env: Env, issuer: Address) -> Vec<u64> {
+        verifiable_credentials::get_issuer_credentials(&env, &issuer)
+    }
+
+    // ── Reputation Tokens (#310) ──────────────────────────────────────────────
+
+    /// Mint reputation tokens for an account based on tip amount. Internal use.
+    ///
+    /// Emits `("rep_mint",)` with `(account, gain, new_score)`.
+    pub fn rep_mint(env: Env, caller: Address, account: Address, amount: i128) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        if caller != stored_admin {
+            panic_with_error!(&env, TipJarError::Unauthorized);
+        }
+        reputation_tokens::mint(&env, &account, amount);
+    }
+
+    /// Trigger reputation decay for an account.
+    ///
+    /// Emits `("rep_dcy",)` with `(account, delta, new_score)`.
+    pub fn rep_decay(env: Env, account: Address) {
+        reputation_tokens::decay(&env, &account);
+    }
+
+    /// Get the current reputation score for an account.
+    pub fn rep_get_score(env: Env, account: Address) -> i128 {
+        reputation_tokens::get_score(&env, &account)
+    }
+
+    /// Get the full reputation token record.
+    pub fn rep_get_token(env: Env, account: Address) -> reputation_tokens::ReputationToken {
+        reputation_tokens::get_token(&env, &account)
+    }
+
+    /// Get reputation history for an account.
+    pub fn rep_get_history(env: Env, account: Address) -> Vec<reputation_tokens::RepTokenHistory> {
+        reputation_tokens::get_history(&env, &account)
+    }
+
+    // ── Composable NFTs (#311) ────────────────────────────────────────────────
+
+    /// Mint a new composable NFT tip receipt.
+    ///
+    /// Emits `("nft_mint",)` with `(id, owner)`.
+    pub fn nft_mint(env: Env, owner: Address, metadata: String) -> u64 {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        composable_nft::mint(&env, &owner, metadata)
+    }
+
+    /// Compose a child NFT into a parent.
+    ///
+    /// Emits `("nft_comp",)` with `(parent_id, child_id, owner)`.
+    pub fn nft_compose(env: Env, owner: Address, parent_id: u64, child_id: u64) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        composable_nft::compose(&env, &owner, parent_id, child_id);
+    }
+
+    /// Decompose a child NFT from its parent.
+    ///
+    /// Emits `("nft_dcp",)` with `(parent_id, child_id, owner)`.
+    pub fn nft_decompose(env: Env, owner: Address, child_id: u64) {
+        Self::require_not_paused(&env);
+        owner.require_auth();
+        composable_nft::decompose(&env, &owner, child_id);
+    }
+
+    /// Get an NFT record.
+    pub fn nft_get(env: Env, nft_id: u64) -> Option<composable_nft::ComposableNft> {
+        composable_nft::get_nft(&env, nft_id)
+    }
+
+    /// Get all NFT IDs owned by an address.
+    pub fn nft_get_owner_nfts(env: Env, owner: Address) -> Vec<u64> {
+        composable_nft::get_owner_nfts(&env, &owner)
+    }
+
+    /// Get child NFT IDs for a parent.
+    pub fn nft_get_children(env: Env, parent_id: u64) -> Vec<u64> {
+        composable_nft::get_children(&env, parent_id)
+    }
+
+    /// Get composition history for an NFT.
+    pub fn nft_get_history(env: Env, nft_id: u64) -> Vec<composable_nft::CompositionEvent> {
+        composable_nft::get_composition_history(&env, nft_id)
     }
 }
